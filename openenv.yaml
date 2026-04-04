@@ -1,0 +1,68 @@
+spec_version: 1
+name: orbital-thruster-env
+version: "1.0.0"
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+description: >
+  An OpenEnv benchmark for satellite attitude control under mission-operations
+  constraints. Agents stabilize, retarget, and hold spacecraft orientation
+  while minimizing RCS fuel use against deterministic disturbance scenarios.
+author: OpenAI Codex
+tags:
+  - aerospace
+  - physics
+  - control
+  - mission-ops
+  - reinforcement-learning
+reward_range: [-1.0, 1.0]
+action_space:
+  - fire_pitch_pos_small
+  - fire_pitch_neg_small
+  - fire_roll_pos_small
+  - fire_roll_neg_small
+  - fire_yaw_pos_small
+  - fire_yaw_neg_small
+  - fire_pitch_pos_large
+  - fire_pitch_neg_large
+  - fire_roll_pos_large
+  - fire_roll_neg_large
+  - fire_yaw_pos_large
+  - fire_yaw_neg_large
+  - idle
+observation_space:
+  type: structured_json
+  fields:
+    - task_id
+    - difficulty
+    - mission_phase
+    - current_attitude_deg
+    - current_angular_velocity_dps
+    - target_attitude_deg
+    - attitude_error_deg
+    - fuel_remaining
+    - fuel_used
+    - step_budget
+    - steps_used
+    - time_elapsed
+    - disturbance_level
+    - last_action
+    - reward_so_far
+    - last_feedback
+    - done
+    - reward
+    - success
+tasks:
+  - id: detumble_satellite
+    difficulty: easy
+    description: Stabilize a newly deployed spacecraft with mild residual spin and settle on the initial target attitude.
+    step_budget: 96
+  - id: retarget_180_flip
+    difficulty: medium
+    description: Execute a large retargeting maneuver and settle without excessive overshoot or wasted fuel.
+    step_budget: 180
+  - id: long_horizon_precision_hold
+    difficulty: hard
+    description: Maintain precision pointing for a compressed long-duration mission segment under continuous disturbances.
+    step_budget: 480
