@@ -2,7 +2,7 @@
 title: Orbital Thruster Environment Server
 sdk: docker
 pinned: false
-app_port: 8000
+app_port: 7860
 base_path: /web
 colorFrom: blue
 colorTo: indigo
