@@ -1,53 +1,108 @@
+---
+title	mlops-pipeline-debugger
+emoji	🧠
+colorFrom	purple
+colorTo	blue
+sdk	docker
+pinned	false
+---
+
 # MLOps Pipeline Debugger
 
-A production-ready OpenEnv reinforcement learning environment where an AI agent debugs broken ML production pipelines by diagnosing and fixing real-world failures like data drift, schema changes, and GPU hardware issues.
+MLOpsDebugger is an OpenEnv benchmark for AI-driven production pipeline troubleshooting. The agent must diagnose and fix real-world ML failures including data drift, schema changes, silent GPU faults, and concept drift using system logs, feature statistics, and learned repair strategies.
 
-**Submitted to: Meta OpenEnv Hackathon**
+The environment simulates realistic production scenarios where multiple failure modes coexist. Easy episodes focus on deterministic schema issues, medium episodes involve concept drift detection and retraining workflows, and hard episodes compress multi-failure forensics into validator-safe episodes with persistent seeded disturbances.
 
----
+## Environment Summary
 
-## Table of Contents
+| Parameter | Value |
+|-----------|-------|
+| Name | mlops-pipeline-debugger |
+| Version | 1.0.0 |
+| Runtime | FastAPI + OpenEnv |
+| Step horizon | 8 / 12 / 15 depending on task |
+| Action space | 12 discrete actions |
+| Reward range | [0.0, 0.35] per step |
+| Success mode | Explicit criteria (root cause + fix applied + accuracy threshold) |
 
-1. [Overview](#overview)
-2. [Motivation](#motivation)
-3. [Environment Architecture](#environment-architecture)
-4. [Tasks](#tasks)
-5. [Action Space](#action-space)
-6. [Observation Space](#observation-space)
-7. [Reward Function](#reward-function)
-8. [Setup & Installation](#setup--installation)
-9. [Usage](#usage)
-10. [Baseline Performance](#baseline-performance)
-11. [Deployment](#deployment)
-12. [Project Structure](#project-structure)
+## Tasks
 
----
+### schema_drift
+**Difficulty:** easy  
+**Goal:** Detect and fix schema changes that broke the ingestion pipeline.  
+**Success:** Schema change identified, schema conversion fix applied, pipeline runs without type errors.  
 
-## Overview
+### concept_drift
+**Difficulty:** medium  
+**Goal:** Identify concept drift and trigger retraining on recent data.  
+**Success:** Drift detected, retraining triggered, model accuracy recovers above baseline.  
 
-**MLOps Pipeline Debugger** is an interactive simulation of real-world ML production failures. The environment presents the agent with realistic error symptoms, logs, and metrics that require systematic diagnosis and targeted fixes. The agent must:
+### gpu_nan_failure
+**Difficulty:** hard  
+**Goal:** Debug silent NaN GPU failure, recover from checkpoint, and restore model accuracy.  
+**Success:** Root cause identified, GPU health verified, model recovered from checkpoint with accuracy restored.
 
-1. **Read and analyze logs** to understand symptoms
-2. **Examine feature statistics** and model weights
-3. **Identify root causes** (schema drift, concept drift, hardware faults)
-4. **Apply targeted fixes** (schema conversion, retraining, checkpoint recovery)
-5. **Verify solutions** through evaluation and deployment
+## Observation Highlights
 
-This environment bridges the gap between RL research and real MLOps challenges, making it ideal for training agents that can handle production troubleshooting.
+Each observation contains: current pipeline status, model accuracy vs baseline, available actions, system logs, feature statistics breakdown, error messages, diagnostic hints, task phase, step counter, and cumulative reward tracking.
 
----
+## Action Space
 
-## Motivation
+The agent may choose one action per step:
 
-### Why MLOps Debugging Matters
+- `check_feature_stats` – Analyze current feature distributions
+- `view_training_logs` – Read recent training and inference logs
+- `fix_schema` – Apply schema conversion fixes
+- `run_eval_set` – Evaluate model on validation set
+- `rollback_model` – Restore previous model checkpoint
+- `analyze_drift` – Perform drift detection analysis
+- `trigger_retraining` – Start model retraining job
+- `deploy_model` – Deploy repaired model to production
+- `check_gpu_health` – Inspect GPU memory and compute status
+- `inspect_model_weights` – Examine weight distributions for anomalies
+- `restart_training_node` – Restart faulty training infrastructure
+- `resume_from_checkpoint` – Resume training from saved state
 
-Modern ML systems are fragile:
-- **Data drift**: Upstream changes, feature engineering shifts
-- **Concept drift**: User behavior changes, market shifts
-- **Silent failures**: GPU NaN weights, corrupted model state
-- **Schema mutations**: API changes, data pipeline schema evolution
+## Reward Design
 
-Each failure requires:
+Per-step reward combines a diagnosis bonus for correct root cause identification, a fix bonus for successful action application, an accuracy recovery term normalized to baseline improvement, an overshoot penalty for aggressive fixes, and a completion bonus for solved tasks.
+
+## API
+
+The environment exposes:
+
+- POST /reset
+- POST /step
+- GET /state
+- GET /schema
+- GET /health
+- GET /
+- GET /tasks
+- POST /reset_hard
+- WS /ws
+
+## Local Usage
+
+```bash
+pip install -e .
+uvicorn server.app:app --host 0.0.0.0 --port 7860
+python validate.py
+```
+
+## Docker
+
+```bash
+docker build -t mlops-pipeline-debugger .
+docker run -p 7860:7860 mlops-pipeline-debugger
+```
+
+## Inference
+
+Set API_BASE_URL, MODEL_NAME, and HF_TOKEN, then run:
+
+```bash
+python inference.py
+```
 - Domain knowledge of ML systems
 - Systematic diagnosis
 - Understanding of state machines and data flows
