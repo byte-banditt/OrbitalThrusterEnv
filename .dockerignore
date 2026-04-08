@@ -1,6 +1,8 @@
-venv/
+.git/
 .agents/
 .codex/
-outputs/
+venv/
 __pycache__/
 *.pyc
+outputs/
+test_env/
