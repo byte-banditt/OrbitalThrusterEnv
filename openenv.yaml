@@ -1,68 +1,96 @@
-spec_version: 1
-name: orbital-thruster-env
+name: mlops-pipeline-debugger
 version: "1.0.0"
-type: space
-runtime: fastapi
-app: server.app:app
-port: 7860
-description: >
-  An OpenEnv benchmark for satellite attitude control under mission-operations
-  constraints. Agents stabilize, retarget, and hold spacecraft orientation
-  while minimizing RCS fuel use against deterministic disturbance scenarios.
-author: OpenAI Codex
+description: "An RL environment where an AI agent debugs broken ML production pipelines by diagnosing data drift, schema changes, and GPU failures."
 tags:
-  - aerospace
-  - physics
-  - control
-  - mission-ops
+  - openenv
+  - mlops
+  - debugging
+  - real-world
   - reinforcement-learning
-reward_range: [-1.0, 1.0]
-action_space:
-  - fire_pitch_pos_small
-  - fire_pitch_neg_small
-  - fire_roll_pos_small
-  - fire_roll_neg_small
-  - fire_yaw_pos_small
-  - fire_yaw_neg_small
-  - fire_pitch_pos_large
-  - fire_pitch_neg_large
-  - fire_roll_pos_large
-  - fire_roll_neg_large
-  - fire_yaw_pos_large
-  - fire_yaw_neg_large
-  - idle
-observation_space:
-  type: structured_json
-  fields:
-    - task_id
-    - difficulty
-    - mission_phase
-    - current_attitude_deg
-    - current_angular_velocity_dps
-    - target_attitude_deg
-    - attitude_error_deg
-    - fuel_remaining
-    - fuel_used
-    - step_budget
-    - steps_used
-    - time_elapsed
-    - disturbance_level
-    - last_action
-    - reward_so_far
-    - last_feedback
-    - done
-    - reward
-    - success
+  - production
+
 tasks:
-  - id: detumble_satellite
+  - id: schema_drift
+    name: "Schema Drift Detection & Fix"
+    description: "Detect and fix a schema change that broke the ingestion pipeline"
     difficulty: easy
-    description: Stabilize a newly deployed spacecraft with mild residual spin and settle on the initial target attitude.
-    step_budget: 96
-  - id: retarget_180_flip
+    max_steps: 8
+    scenario: "An upstream API changed the 'Age' feature from int to string. The pipeline crashes on type validation."
+    
+  - id: concept_drift
+    name: "Concept Drift Detection & Retraining"
+    description: "Identify concept drift and trigger retraining on recent data"
     difficulty: medium
-    description: Execute a large retargeting maneuver and settle without excessive overshoot or wasted fuel.
-    step_budget: 180
-  - id: long_horizon_precision_hold
+    max_steps: 12
+    scenario: "Model accuracy has silently dropped from 0.89 to 0.61 over 2 weeks due to shifting user behavior patterns."
+    
+  - id: gpu_nan_failure
+    name: "Silent GPU NaN Failure Recovery"
+    description: "Debug silent NaN GPU failure, recover from checkpoint, and restore model accuracy"
     difficulty: hard
-    description: Maintain precision pointing for a compressed long-duration mission segment under continuous disturbances.
-    step_budget: 480
+    max_steps: 15
+    scenario: "A faulty GPU driver causes NaN loss spikes during fine-tuning. Model silently produces garbage predictions."
+
+action_space: 
+  type: discrete
+  size: 9
+  actions:
+    - check_feature_stats
+    - view_training_logs
+    - fix_schema
+    - run_eval_set
+    - rollback_model
+    - analyze_drift
+    - trigger_retraining
+    - deploy_model
+    - check_gpu_health
+    - inspect_model_weights
+    - restart_training_node
+    - resume_from_checkpoint
+
+observation_space: 
+  type: structured
+  fields:
+    - task_id (str)
+    - step (int)
+    - pipeline_status (str)
+    - model_accuracy (float)
+    - baseline_accuracy (float)
+    - available_actions (list)
+    - logs (list)
+    - feature_stats (dict)
+    - error_messages (list)
+    - hint (str)
+
+reward_range: [0.0, 0.35]
+episode_horizon: 15
+success_criteria:
+  - root_cause_identified == True
+  - fix_applied == True
+  - model_accuracy >= baseline_accuracy
+
+api:
+  server: FastAPI
+  port: 7860
+  endpoints:
+    - POST /reset (task_id: str) → Observation
+    - POST /step (action: MLOpsAction) → {observation, reward, done, info}
+    - GET /state → MLOpsState
+    - GET /health → HealthResponse
+    - GET /tasks → List[TaskDescription]
+
+runtime:
+  language: Python 3.11
+  framework: FastAPI
+  asynchronous: false
+  deterministic: true
+  reproducible: true
+
+baseline:
+  model: Qwen/Qwen2.5-72B-Instruct
+  routing: huggingface-router
+  expected_performance:
+    schema_drift: 0.75
+    concept_drift: 0.65
+    gpu_nan_failure: 0.55
+    average: 0.65
