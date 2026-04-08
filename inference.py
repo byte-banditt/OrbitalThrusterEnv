@@ -37,6 +37,7 @@ API_BASE_URL = _first_env("API_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE") 
 MODEL_NAME = _first_env("MODEL_NAME", "MODEL_ID", "OPENAI_MODEL", "MODEL") or "<set-model-name>"
 HF_TOKEN = _first_env("HF_TOKEN", "OPENAI_API_KEY", "API_KEY")
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860").rstrip("/")
+BENCHMARK = os.getenv("BENCHMARK_NAME", "orbital-thruster-env")
 
 TASKS = [
     "detumble_satellite",
@@ -262,72 +263,91 @@ def choose_action(client: OpenAI | None, observation: dict[str, Any]) -> dict[st
     return action
 
 
-def log_event(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=True), flush=True)
+def _one_line(value: str) -> str:
+    return " ".join(str(value).split())
+
+
+def _bool_text(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def log_start(task: str) -> None:
+    print(f"[START] task={task} env={BENCHMARK} model={MODEL_NAME}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
+    error_value = "null" if not error else _one_line(error)
+    print(
+        f"[STEP] step={step} action={_one_line(action)} reward={reward:.2f} "
+        f"done={_bool_text(done)} error={error_value}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    rewards_text = ",".join(f"{value:.2f}" for value in rewards)
+    print(
+        f"[END] success={_bool_text(success)} steps={steps} score={score:.2f} rewards={rewards_text}",
+        flush=True,
+    )
 
 
 def run_task(task_id: str, client: OpenAI | None) -> dict[str, Any]:
-    reset_result = safe_post(f"{ENV_URL}/reset", {"task_id": task_id})
-    if not reset_result:
-        failure = {
-            "task_id": task_id,
-            "total_reward": 0.0,
-            "steps_used": 0,
-            "success": False,
-        }
-        log_event({"event": "START", "task_id": task_id, "difficulty": "unknown", "step_budget": 0})
-        log_event({"event": "END", "task_id": task_id, "total_reward": 0.0, "steps_used": 0, "success": False})
-        return failure
-
-    observation = reset_result.get("observation", {})
-    difficulty = observation.get("difficulty", "unknown")
-    step_budget = int(observation.get("step_budget", 0))
-    log_event({"event": "START", "task_id": task_id, "difficulty": difficulty, "step_budget": step_budget})
-
-    total_reward = 0.0
+    rewards: list[float] = []
     steps_used = 0
-    done = bool(reset_result.get("done", False))
+    success = False
+    score = 0.0
+    observation: dict[str, Any] = {}
+    log_start(task_id)
 
-    while not done and steps_used < step_budget:
-        steps_used += 1
-        action = choose_action(client, observation)
-        step_result = safe_post(f"{ENV_URL}/step", {"action": action})
-        if not step_result:
-            observation = dict(observation)
-            observation["last_feedback"] = "Step request failed; terminating episode."
-            done = True
-            reward = -1.0
-        else:
-            observation = step_result.get("observation", {})
-            reward = float(step_result.get("reward") or 0.0)
-            done = bool(step_result.get("done", False))
+    try:
+        reset_result = safe_post(f"{ENV_URL}/reset", {"task_id": task_id})
+        if not reset_result:
+            return {"task_id": task_id, "score": 0.0, "success": False, "steps_used": 0}
 
-        total_reward = round(total_reward + reward, 6)
-        log_event({
-            "event": "STEP",
-            "task_id": task_id,
-            "step": steps_used,
-            "action": action.get("action_type", "idle"),
-            "reward": round(reward, 6),
-            "total_reward": round(total_reward, 6),
-            "done": done,
-        })
+        observation = reset_result.get("observation", {})
+        step_budget = int(observation.get("step_budget", 0))
+        done = bool(reset_result.get("done", False))
 
-    success = bool(observation.get("success", False))
-    result = {
-        "task_id": task_id,
-        "total_reward": round(total_reward, 6),
-        "steps_used": int(observation.get("steps_used", steps_used)),
-        "success": success,
-    }
-    log_event({
-        "event": "END",
-        "task_id": task_id,
-        "total_reward": result["total_reward"],
-        "steps_used": result["steps_used"],
-        "success": success,
-    })
-    return result
+        while not done and steps_used < step_budget:
+            steps_used += 1
+            action = choose_action(client, observation)
+            step_result = safe_post(f"{ENV_URL}/step", {"action": action})
+            error_text: str | None = None
+            if not step_result:
+                error_text = "step request failed"
+                done = True
+                reward = -1.0
+            else:
+                observation = step_result.get("observation", {})
+                reward = float(step_result.get("reward") or 0.0)
+                done = bool(step_result.get("done", False))
+                error_candidate = step_result.get("last_action_error")
+                if error_candidate is None and isinstance(observation, dict):
+                    error_candidate = observation.get("last_action_error")
+                if error_candidate:
+                    error_text = str(error_candidate)
+
+            rewards.append(reward)
+            log_step(
+                step=steps_used,
+                action=action.get("action_type", "idle"),
+                reward=reward,
+                done=done,
+                error=error_text,
+            )
+
+        success = bool(observation.get("success", False))
+        steps_used = int(observation.get("steps_used", steps_used))
+        if rewards:
+            average_reward = sum(rewards) / len(rewards)
+            score = max(0.0, min(1.0, (average_reward + 1.0) / 2.0))
+    except Exception as exc:
+        print(f"[inference.py] Task {task_id} failed: {exc}", file=sys.stderr, flush=True)
+    finally:
+        log_end(success=success, steps=steps_used, score=score, rewards=rewards)
+
+    return {"task_id": task_id, "score": score, "success": success, "steps_used": steps_used}
 
 
 if __name__ == "__main__":
