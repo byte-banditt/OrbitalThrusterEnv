@@ -1,3 +1,15 @@
+---
+title: Orbital Thruster Environment Server
+sdk: docker
+pinned: false
+app_port: 8000
+base_path: /web
+colorFrom: blue
+colorTo: indigo
+tags:
+  - openenv
+---
+
 # OrbitalThrusterEnv
 
 OrbitalThrusterEnv is an OpenEnv benchmark for satellite attitude control under mission-operations constraints. The agent must stabilize, reorient, and hold a spacecraft on target using a limited reaction-control-system fuel supply while deterministic environmental disturbances push the vehicle off attitude.
@@ -82,8 +94,11 @@ docker run -p 7860:7860 orbital-thruster-env
 
 ## Inference
 
-Set `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN`, then run:
+`API_BASE_URL` and `MODEL_NAME` have defaults in `inference.py` (placeholders that must be overridden at runtime). `HF_TOKEN` is required and has no default.
 
 ```powershell
+$env:API_BASE_URL = "https://router.huggingface.co/v1"
+$env:MODEL_NAME = "openai/gpt-4.1-mini"
+$env:HF_TOKEN = "hf_xxx"
 python inference.py
 ```

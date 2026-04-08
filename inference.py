@@ -8,9 +8,9 @@ import requests
 from openai import OpenAI
 
 
-API_BASE_URL = os.environ["API_BASE_URL"]
-MODEL_NAME = os.environ["MODEL_NAME"]
-HF_TOKEN = os.environ["HF_TOKEN"]
+API_BASE_URL = os.getenv("API_BASE_URL", "<set-api-base-url>")
+MODEL_NAME = os.getenv("MODEL_NAME", "<set-model-name>")
+HF_TOKEN = os.getenv("HF_TOKEN")
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860").rstrip("/")
 
 TASKS = [
@@ -60,6 +60,15 @@ Controller rules:
 5. If the current rates and errors are already low, prefer idle over unnecessary firings.
 6. Output valid JSON only.
 """.strip()
+
+
+def validate_runtime_config() -> None:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN is required. Set the HF token before running inference.py.")
+    if API_BASE_URL == "<set-api-base-url>":
+        raise RuntimeError("API_BASE_URL is using the placeholder default. Set API_BASE_URL to your endpoint.")
+    if MODEL_NAME == "<set-model-name>":
+        raise RuntimeError("MODEL_NAME is using the placeholder default. Set MODEL_NAME to your model id.")
 
 
 def safe_post(url: str, payload: dict[str, Any], retries: int = 3, delay: float = 1.5) -> dict[str, Any] | None:
@@ -224,10 +233,7 @@ def run_task(task_id: str, client: OpenAI) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
+    validate_runtime_config()
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-    results: list[dict[str, Any]] = []
     for task_name in TASKS:
-        results.append(run_task(task_name, llm_client))
-
-    overall = round(sum(item["total_reward"] for item in results) / max(len(results), 1), 6)
-    log_event({"event": "SUMMARY", "results": results, "overall_score": overall})
+        run_task(task_name, llm_client)
