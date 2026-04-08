@@ -33,9 +33,9 @@ def _is_placeholder(value: str | None) -> bool:
     return value.strip().lower() in PLACEHOLDER_VALUES
 
 
-API_BASE_URL = _first_env("API_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE") or "<set-api-base-url>"
-MODEL_NAME = _first_env("MODEL_NAME", "MODEL_ID", "OPENAI_MODEL", "MODEL") or "<set-model-name>"
-HF_TOKEN = _first_env("HF_TOKEN", "OPENAI_API_KEY", "API_KEY")
+API_BASE_URL = _first_env("API_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE")
+MODEL_NAME = _first_env("MODEL_NAME", "MODEL_ID", "OPENAI_MODEL", "MODEL") or "openai/gpt-4.1-mini"
+API_KEY = _first_env("API_KEY", "HF_TOKEN", "OPENAI_API_KEY")
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860").rstrip("/")
 BENCHMARK = os.getenv("BENCHMARK_NAME", "orbital-thruster-env")
 
@@ -90,12 +90,10 @@ Controller rules:
 
 def build_llm_client() -> OpenAI | None:
     missing: list[str] = []
-    if _is_placeholder(HF_TOKEN):
-        missing.append("HF_TOKEN")
+    if _is_placeholder(API_KEY):
+        missing.append("API_KEY")
     if _is_placeholder(API_BASE_URL):
         missing.append("API_BASE_URL")
-    if _is_placeholder(MODEL_NAME):
-        missing.append("MODEL_NAME")
 
     if missing:
         print(
@@ -107,7 +105,7 @@ def build_llm_client() -> OpenAI | None:
         return None
 
     try:
-        return OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     except Exception as exc:
         print(
             f"[inference.py] Failed to initialize OpenAI client ({exc}). Falling back to deterministic controller.",
@@ -115,6 +113,24 @@ def build_llm_client() -> OpenAI | None:
             flush=True,
         )
         return None
+
+
+def warmup_llm(client: OpenAI | None) -> None:
+    if client is None:
+        return
+    try:
+        client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "Return exactly: ok"},
+                {"role": "user", "content": "ok"},
+            ],
+            temperature=0.0,
+            max_tokens=4,
+            stream=False,
+        )
+    except Exception as exc:
+        print(f"[inference.py] Warmup call failed: {exc}", file=sys.stderr, flush=True)
 
 
 def safe_post(url: str, payload: dict[str, Any], retries: int = 3, delay: float = 1.5) -> dict[str, Any] | None:
@@ -352,5 +368,6 @@ def run_task(task_id: str, client: OpenAI | None) -> dict[str, Any]:
 
 if __name__ == "__main__":
     llm_client = build_llm_client()
+    warmup_llm(llm_client)
     for task_name in TASKS:
         run_task(task_name, llm_client)
