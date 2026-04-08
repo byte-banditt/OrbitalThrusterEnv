@@ -1,12 +1,3 @@
----
-title: orbital-thruster-env
-emoji: 🛰️
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-pinned: false
----
-
 # OrbitalThrusterEnv
 
 OrbitalThrusterEnv is an OpenEnv benchmark for satellite attitude control under mission-operations constraints. The agent must stabilize, reorient, and hold a spacecraft on target using a limited reaction-control-system fuel supply while deterministic environmental disturbances push the vehicle off attitude.
