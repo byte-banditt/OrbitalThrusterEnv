@@ -10,95 +10,78 @@ tags:
   - openenv
 ---
 
-# OrbitalThrusterEnv
+# OrbitalThrusterEnv: Train LLMs for Fuel-Aware Spacecraft Control
 
-OrbitalThrusterEnv is an OpenEnv benchmark for satellite attitude control under mission-operations constraints. The agent must stabilize, reorient, and hold a spacecraft on target using a limited reaction-control-system fuel supply while deterministic environmental disturbances push the vehicle off attitude.
+## The Problem
+LLMs can explain control theory, but often fail to execute closed-loop control over long horizons under hard constraints.
+OrbitalThrusterEnv trains this gap directly: stabilize and retarget a spacecraft while conserving finite propellant.
+If solved well, this maps to real mission-operations workflows where poor control burns fuel, misses pointing windows, and risks mission failure.
 
-The environment is designed to reward planning instead of brute-force firing. Easy episodes focus on detumbling, medium episodes require a controlled 180-degree retargeting maneuver without overshoot, and hard episodes compress a long-horizon precision-pointing task into a validator-safe simulation with persistent seeded disturbances.
-
-## Environment Summary
-
-| Parameter | Value |
-| --- | --- |
-| Name | `orbital-thruster-env` |
-| Version | `1.0.0` |
-| Runtime | FastAPI + OpenEnv |
-| Step horizon | 96 / 180 / 480 depending on task |
-| Action space | 13 discrete actions |
-| Reward range | `[-1.0, 1.0]` per step |
-| Success mode | Explicit task thresholds plus dense reward |
-
-## Tasks
-
-### `detumble_satellite`
-- Difficulty: `easy`
-- Goal: eliminate deployment spin and settle near the target attitude.
-- Success: final pointing error within 2 degrees on every axis, low angular rate, and positive fuel reserve.
-
-### `retarget_180_flip`
-- Difficulty: `medium`
-- Goal: execute a large slew to a new target attitude and settle without excessive overshoot.
-- Success: final pointing error within 1.5 degrees, bounded overshoot, and a sustained settle streak.
-
-### `long_horizon_precision_hold`
-- Difficulty: `hard`
-- Goal: maintain precision pointing throughout a disturbance-heavy compressed long-duration mission segment.
-- Success: low mean pointing error, high fraction of time within 1 degree, and fuel usage below budget.
-
-## Observation Highlights
-
-Each observation contains current attitude, angular velocity, target attitude, signed error, fuel state, mission phase, disturbance level, cumulative reward, and the last feedback string.
-
-## Action Space
-
-The agent may choose one action per step:
-- `fire_pitch_pos_small`, `fire_pitch_neg_small`
-- `fire_roll_pos_small`, `fire_roll_neg_small`
-- `fire_yaw_pos_small`, `fire_yaw_neg_small`
-- `fire_pitch_pos_large`, `fire_pitch_neg_large`
-- `fire_roll_pos_large`, `fire_roll_neg_large`
-- `fire_yaw_pos_large`, `fire_yaw_neg_large`
-- `idle`
+## The Environment
+Agent observes: `task_id`, `difficulty`, `mission_phase`, current attitude/rates, target attitude, signed error, fuel, disturbance level, step counters, reward, success.
+Agent can: choose exactly one discrete action each step from 13 commands (`fire_<axis>_<dir>_<size>` or `idle`).
+Episode ends when: success criteria are satisfied (easy/medium early stop) or task step budget is exhausted.
+One episode looks like: reset task state with seeded disturbances, take one thruster action per step, and receive dense reward + feedback string.
+Easy focuses detumbling, medium enforces a controlled large-angle retarget without overshoot, hard enforces long-horizon precision hold under disturbances.
 
 ## Reward Design
 
-Per-step reward combines a pointing term, a fuel penalty, a stability penalty near target, an overshoot penalty on harder tasks, and a hold bonus for consecutive on-target steps.
+| Component | Weight | What it measures | Anti-hack guard |
+| --- | --- | --- | --- |
+| primary_objective | 0.40 | Error reduction toward target with terminal accuracy | Final max-axis error + hold streak + fuel reserve gates |
+| process_quality | 0.25 | Smooth, stable control with bounded angular rates | Stability penalty + overshoot penalty + rate tolerance checks |
+| format_compliance | 0.20 | Valid action schema and parse-safe output | Strict enum actions, invalid payload fallback penalties |
+| efficiency | 0.15 | Fuel and step economy while still solving task | No efficiency credit unless objective quality crosses threshold |
 
-## API
+## Results
+![Reward Curve](plots/reward_curve.png)
+*Reward over training steps. Dashed = untrained baseline (0.XX). Trained agent reaches 0.XX.*
 
-The environment exposes:
-- `POST /reset`
-- `POST /step`
-- `GET /state`
-- `GET /schema`
-- `GET /health`
-- `GET /`
-- `GET /tasks`
-- `POST /reset_hard`
-- `WS /ws`
+![Before vs After](plots/before_after.png)
+*Left: untrained agent output. Right: trained agent output on same task.*
 
-## Local Usage
+**Summary:** Training improved mean episode reward from **X.XX -> X.XX** (+XX%).
 
+## Quickstart
 ```powershell
-pip install -e .
-uvicorn server.app:app --host 0.0.0.0 --port 7860
-python validate.py
+# 1) Install runtime deps
+powershell -ExecutionPolicy Bypass -File scripts/setup_deps.ps1
+
+# 2) Run server
+python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
+
+# 3) Validate contract
+python validate.py http://127.0.0.1:7860
 ```
 
-## Docker
-
+Model selection helper:
 ```powershell
-docker build -t orbital-thruster-env .
-docker run -p 7860:7860 orbital-thruster-env
+python scripts/select_model.py --gpu t4 --mode balanced
+python scripts/select_model.py --gpu a100 --mode quality
 ```
 
-## Inference
-
-`API_BASE_URL` and `MODEL_NAME` have defaults in `inference.py` (placeholders that must be overridden at runtime). `HF_TOKEN` is required and has no default.
-
+Training template:
 ```powershell
-$env:API_BASE_URL = "https://router.huggingface.co/v1"
-$env:MODEL_NAME = "openai/gpt-4.1-mini"
-$env:HF_TOKEN = "hf_xxx"
-python inference.py
+# Use this as the base notebook script for Colab
+type training\grpo_colab_template.py
 ```
+
+## Links
+- HF Space (live env): `<add-space-url>`
+- Colab training notebook: `<add-colab-url>`
+- Mini-blog / writeup: `<add-blog-or-youtube-url>`
+- WandB training run: `<add-wandb-url>`
+- Demo video (<2 min): `<add-demo-url>`
+
+## Local Validation Status
+- `openenv-core` installed: `0.2.3`
+- `validate.py` status: `32 / 32 checks passed` on local run against `http://127.0.0.1:7860`
+
+## Project Structure
+- `server/`: OpenEnv FastAPI environment implementation
+- `models.py`: typed action/observation/state contracts
+- `client.py`: environment client wrapper
+- `openenv.yaml`: manifest metadata for OpenEnv
+- `docs/HACKATHON_PLAN.md`: repo map, theme choice, reward audit, and strategy
+- `docs/MODEL_OPTIONS.md`: model comparison and selection guidance
+- `training/grpo_colab_template.py`: sectioned GRPO training template
