@@ -30,6 +30,11 @@ app = create_app(
     env_name="orbital_thruster_env",
     max_concurrent_envs=1,
 )
+app.router.routes = [
+    route
+    for route in app.router.routes
+    if not (getattr(route, "path", None) == "/state" and "GET" in getattr(route, "methods", set()))
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,7 +57,7 @@ async def root():
         "name": "orbital-thruster-env",
         "version": "1.0.0",
         "status": "running",
-        "description": "OpenEnv benchmark for spacecraft attitude control with limited RCS fuel",
+        "description": "OpenEnv mission-operations benchmark for long-horizon spacecraft control with fuel, directives, milestones, and anomaly recovery",
         "tasks": list_tasks(),
     }
 
@@ -60,6 +65,11 @@ async def root():
 @app.get("/tasks")
 async def get_tasks():
     return list_tasks()
+
+
+@app.get("/state")
+async def get_state():
+    return build_environment().state.model_dump()
 
 
 @app.post("/reset_hard")

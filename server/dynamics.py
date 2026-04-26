@@ -57,11 +57,20 @@ def parse_action(action_type: str, control_small: float, control_large: float, f
     return axis, sign * magnitude, fuel
 
 
-def propagate(task: MissionTask, snapshot: dict[str, Any], action_type: str, step_number: int, coefficients: dict[str, list[tuple[float, float, float]]]) -> dict[str, Any]:
+def propagate(
+    task: MissionTask,
+    snapshot: dict[str, Any],
+    action_type: str,
+    step_number: int,
+    coefficients: dict[str, list[tuple[float, float, float]]],
+    anomaly_rate_bias: dict[str, float] | None = None,
+    disturbance_scale: float = 1.0,
+) -> dict[str, Any]:
     config = task.config
     current_attitude = dict(snapshot["attitude"])
     current_rates = dict(snapshot["rates"])
     fuel_remaining = float(snapshot["fuel_remaining"])
+    anomaly_rate_bias = anomaly_rate_bias or {axis: 0.0 for axis in AXES}
 
     axis, pulse_delta, requested_fuel = parse_action(
         action_type,
@@ -87,7 +96,8 @@ def propagate(task: MissionTask, snapshot: dict[str, Any], action_type: str, ste
         damping_factor = max(0.0, 1.0 - (damping[axis_name] * config.time_step_seconds / inertia[axis_name]))
         rate = current_rates[axis_name] * damping_factor
         rate += pulse_vector[axis_name] / inertia[axis_name]
-        rate += disturbance[axis_name] * config.time_step_seconds
+        rate += disturbance[axis_name] * disturbance_scale * config.time_step_seconds
+        rate += anomaly_rate_bias.get(axis_name, 0.0)
         angle = wrap_angle_deg(current_attitude[axis_name] + (rate * config.time_step_seconds))
         next_rates[axis_name] = rate
         next_attitude[axis_name] = angle
@@ -99,5 +109,5 @@ def propagate(task: MissionTask, snapshot: dict[str, Any], action_type: str, ste
         "fuel_used_step": actual_fuel,
         "pulse_vector": pulse_vector,
         "disturbance_vector": disturbance,
-        "disturbance_level": config.disturbance_profile.reported_level,
+        "disturbance_level": round(config.disturbance_profile.reported_level * disturbance_scale, 6),
     }

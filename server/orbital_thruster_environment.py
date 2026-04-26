@@ -33,7 +33,13 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
         self._best_tracking_window = 0
         self._overshoot_total = 0.0
         self._last_action: str | None = None
+        self._last_control_mode: str | None = None
         self._last_feedback = "Reset required."
+        self._last_reward_breakdown: dict[str, float] = {}
+        self._reward_column_totals: dict[str, float] = {}
+        self._milestones_completed: list[str] = []
+        self._milestone_set: set[str] = set()
+        self._stall_steps = 0
         self._done = False
         self._time_elapsed = 0.0
         self._rates = {axis: 0.0 for axis in AXES}
@@ -45,6 +51,7 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
         self._fuel_used = 0.0
         self._reward_so_far = 0.0
         self._recent_error_window: deque[float] = deque(maxlen=25)
+        self._recent_modes: deque[str] = deque(maxlen=6)
         self._state = EnvState(episode_id=str(uuid4()), step_count=0)
 
     def reset(self, seed: int | None = None, episode_id: str | None = None, task_id: str = "detumble_satellite", **_: Any) -> OrbitalThrusterObservation:
@@ -57,7 +64,13 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
         self._best_tracking_window = 0
         self._overshoot_total = 0.0
         self._last_action = None
+        self._last_control_mode = None
         self._last_feedback = "Episode reset. Awaiting first control action."
+        self._last_reward_breakdown = self._zero_reward_breakdown()
+        self._reward_column_totals = self._zero_reward_breakdown()
+        self._milestones_completed = []
+        self._milestone_set = set()
+        self._stall_steps = 0
         self._done = False
         self._time_elapsed = 0.0
         self._attitude = self._task.initial_attitude_map()
@@ -73,6 +86,7 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
         self._reward_so_far = 0.0
         self._recent_error_window = deque(maxlen=25)
         self._recent_error_window.append(self._error_norm())
+        self._recent_modes = deque(maxlen=6)
         self._history_errors.append(self._error_norm())
         self._state = EnvState(
             episode_id=episode_id or str(uuid4()),
@@ -83,6 +97,9 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
             fuel_used=self._fuel_used,
             cumulative_reward=0.0,
             best_tracking_window=0,
+            milestones_completed=[],
+            anomaly_flags=self._task.anomaly_flags_for_step(0),
+            reward_columns=dict(self._reward_column_totals),
             done=False,
         )
         return self._make_observation(reward=0.0, success=False)
@@ -96,9 +113,13 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
 
         assert self._task is not None
         previous_errors = dict(self._errors)
+        previous_error_norm = self._error_norm()
+        previous_rate_norm = vector_magnitude(self._rates)
         self._state.step_count += 1
         step_number = self._state.step_count
-        self._target = dict(zip(AXES, self._task.target_for_step(step_number)))
+        active_directive = self._task.directive_for_step(step_number)
+        active_anomaly_flags = self._task.anomaly_flags_for_step(step_number)
+        self._target = dict(zip(AXES, active_directive.attitude_deg))
 
         dynamics_result = propagate(
             self._task,
@@ -110,6 +131,8 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
             action.action_type,
             step_number,
             self._disturbance_coefficients,
+            anomaly_rate_bias=self._task.anomaly_rate_bias_for_step(step_number),
+            disturbance_scale=self._task.disturbance_scale_for_step(step_number),
         )
 
         self._attitude = dynamics_result["attitude"]
@@ -140,6 +163,16 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
         self._best_tracking_window = max(self._best_tracking_window, self._on_target_streak)
         self._history_errors.append(error_norm)
         self._recent_error_window.append(error_norm)
+        self._recent_modes.append(action.control_mode)
+
+        error_improvement = max(0.0, previous_error_norm - error_norm)
+        rate_improvement = max(0.0, previous_rate_norm - rate_norm)
+        if error_improvement < 0.03 and rate_improvement < 0.01:
+            self._stall_steps += 1
+        else:
+            self._stall_steps = 0
+
+        directive_completed = self._update_milestones(active_directive, error_norm, rate_norm)
 
         reward, reward_terms = self._scorer.compute(
             self._task,
@@ -149,11 +182,24 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
                 "fuel_used_step": dynamics_result["fuel_used_step"],
                 "overshoot_increment": overshoot_increment,
                 "on_target_streak": self._on_target_streak,
+                "control_mode": action.control_mode,
+                "recommended_modes": self._task.recommended_modes_for_step(step_number),
+                "directive_completed": directive_completed,
+                "anomaly_flags": active_anomaly_flags,
+                "error_improvement": error_improvement,
+                "rate_improvement": rate_improvement,
+                "stall_steps": self._stall_steps,
+                "fuel_remaining": self._fuel_remaining,
+                "fuel_reserve_target": active_directive.fuel_reserve_target,
             },
         )
         self._reward_so_far = round(self._reward_so_far + reward, 6)
         self._time_elapsed = step_number * self._task.config.time_step_seconds
         self._last_action = action.action_type
+        self._last_control_mode = action.control_mode
+        self._last_reward_breakdown = reward_terms
+        for key, value in reward_terms.items():
+            self._reward_column_totals[key] = round(self._reward_column_totals.get(key, 0.0) + value, 6)
 
         episode_score = self._episode_score(error_norm, rate_norm)
         success = self._success(error_norm=error_norm, rate_norm=rate_norm)
@@ -165,6 +211,7 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
                 "fuel_remaining": self._fuel_remaining,
                 "hold_streak": self._on_target_streak,
                 "overshoot_total": self._overshoot_total,
+                "anomaly_flags": active_anomaly_flags,
             },
             reward_terms,
             episode_score,
@@ -184,6 +231,9 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
         self._state.fuel_used = self._fuel_used
         self._state.cumulative_reward = self._reward_so_far
         self._state.best_tracking_window = self._best_tracking_window
+        self._state.milestones_completed = list(self._milestones_completed)
+        self._state.anomaly_flags = active_anomaly_flags
+        self._state.reward_columns = dict(self._reward_column_totals)
         self._state.done = self._done
 
         if self._done:
@@ -208,10 +258,18 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
 
     def _make_observation(self, reward: float, success: bool) -> OrbitalThrusterObservation:
         assert self._task is not None
+        directive = self._task.directive_for_step(self._state.step_count)
         return OrbitalThrusterObservation(
             task_id=self._task.task_id,
             difficulty=self._task.difficulty,
-            mission_phase=self._task.phase_for_step(self._state.step_count),
+            mission_phase=directive.phase,
+            mission_brief=self._task.config.mission_brief,
+            active_directive=directive.instruction,
+            pending_directives_count=self._task.pending_directives_count(self._state.step_count),
+            milestones_completed=list(self._milestones_completed),
+            anomaly_flags=self._task.anomaly_flags_for_step(self._state.step_count),
+            fuel_reserve_target=directive.fuel_reserve_target,
+            phase_deadline_step=directive.deadline_step,
             current_attitude_deg=AttitudeVector(**self._attitude),
             current_angular_velocity_dps=AttitudeVector(**self._rates),
             target_attitude_deg=AttitudeVector(**self._target),
@@ -228,6 +286,8 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
             done=self._done,
             reward=round(reward, 6),
             success=success,
+            reward_breakdown=dict(self._last_reward_breakdown),
+            episode_metrics=self._episode_metrics(success, reward),
         )
 
     def _success(self, error_norm: float | None = None, rate_norm: float | None = None) -> bool:
@@ -244,6 +304,7 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
                 "mean_error": sum(self._history_errors) / max(len(self._history_errors), 1),
                 "on_target_fraction": self._on_target_steps / max(self._state.step_count, 1),
                 "overshoot_total": self._overshoot_total,
+                "milestones_completed_count": len(self._milestones_completed),
             },
         )
 
@@ -261,9 +322,62 @@ class OrbitalThrusterEnvironment(Environment[OrbitalThrusterAction, OrbitalThrus
                 "overshoot_total": self._overshoot_total,
                 "hold_streak": self._on_target_streak,
                 "fuel_remaining": self._fuel_remaining,
+                "milestones_completed_count": len(self._milestones_completed),
             },
         )
 
     def _error_norm(self) -> float:
         return vector_magnitude(self._errors)
+
+    def _directive_complete(self, directive, error_norm: float, rate_norm: float) -> bool:
+        if not directive.milestone:
+            return False
+        if directive.milestone in self._milestone_set:
+            return False
+        tolerance = directive.completion_tolerance_deg or self._task.config.final_tolerance_deg
+        rate_tolerance = directive.completion_rate_tolerance_dps or self._task.config.angular_rate_tolerance_dps
+        hold_steps = directive.completion_hold_steps or self._task.config.hold_streak_success
+        max_axis_error = max(abs(value) for value in self._errors.values())
+        return (
+            self._state.step_count <= directive.deadline_step
+            and max_axis_error <= tolerance
+            and rate_norm <= rate_tolerance
+            and self._on_target_streak >= hold_steps
+        )
+
+    def _update_milestones(self, directive, error_norm: float, rate_norm: float) -> bool:
+        if not self._directive_complete(directive, error_norm=error_norm, rate_norm=rate_norm):
+            return False
+        self._milestone_set.add(directive.milestone)
+        self._milestones_completed.append(directive.milestone)
+        return True
+
+    def _episode_metrics(self, success: bool, reward: float) -> dict[str, float]:
+        directive_count = max(len(self._task.config.target_schedule), 1)
+        return {
+            "episode_reward_total": round(self._reward_so_far, 6),
+            "episode_score_proxy": self._episode_score(self._error_norm(), vector_magnitude(self._rates)),
+            "step_reward": round(reward, 6),
+            "milestones_completed_count": float(len(self._milestones_completed)),
+            "directive_completion_ratio": round(len(self._milestones_completed) / directive_count, 6),
+            "on_target_fraction": round(self._on_target_steps / max(self._state.step_count, 1), 6),
+            "fuel_used": round(self._fuel_used, 6),
+            "success_flag": 1.0 if success else 0.0,
+        }
+
+    @staticmethod
+    def _zero_reward_breakdown() -> dict[str, float]:
+        return {
+            "physical_tracking_reward": 0.0,
+            "fuel_discipline_reward": 0.0,
+            "milestone_completion_reward": 0.0,
+            "control_mode_reward": 0.0,
+            "anomaly_recovery_reward": 0.0,
+            "anti_stall_penalty": 0.0,
+            "pointing": 0.0,
+            "fuel_penalty": 0.0,
+            "stability_penalty": 0.0,
+            "overshoot_penalty": 0.0,
+            "hold_bonus": 0.0,
+        }
 

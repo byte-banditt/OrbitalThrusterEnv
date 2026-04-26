@@ -8,3 +8,9 @@ __pycache__/
 *.engg-info/
 [Ee]xternal*
 *.pdf
+venv310_gpu/
+*.egg-info
+server/__pycache__/
+unsloth_compiled_cache/
+final_problem.md
+.claude/

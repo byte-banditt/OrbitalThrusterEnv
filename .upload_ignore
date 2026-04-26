@@ -1,0 +1,9 @@
+venv*/
+__pycache__/
+.git/
+.claude/
+trainer_output/
+outputs/training/
+outputs/eval_trained/
+training/unsloth_compiled_cache/
+*.pyc

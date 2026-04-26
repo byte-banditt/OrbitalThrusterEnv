@@ -43,6 +43,7 @@ TASKS = [
     "detumble_satellite",
     "retarget_180_flip",
     "long_horizon_precision_hold",
+    "mission_ops_long_horizon",
 ]
 
 VALID_ACTIONS = {
@@ -61,6 +62,16 @@ VALID_ACTIONS = {
     "idle",
 }
 
+VALID_CONTROL_MODES = {
+    "detumble",
+    "slew",
+    "brake",
+    "trim",
+    "hold",
+    "recover",
+    "safe_hold",
+}
+
 SYSTEM_PROMPT = """
 You are a fuel-aware satellite mission-operations controller inside OrbitalThrusterEnv.
 Your task is to choose one discrete thruster pulse or idle at each step to minimize attitude
@@ -75,16 +86,18 @@ You must respond with JSON only and use this schema:
                  "fire_roll_pos_large" | "fire_roll_neg_large" |
                  "fire_yaw_pos_large" | "fire_yaw_neg_large" |
                  "idle",
+  "control_mode": "detumble" | "slew" | "brake" | "trim" | "hold" | "recover" | "safe_hold",
   "reason": "one concise sentence"
 }
 
 Controller rules:
 1. Read the full state before acting.
-2. Favor small pulses near target and large pulses only when a large slew is required.
-3. Brake residual angular velocity before it creates overshoot.
-4. Preserve fuel on the hard task.
-5. If the current rates and errors are already low, prefer idle over unnecessary firings.
-6. Output valid JSON only.
+2. Match `control_mode` to the current directive and anomaly state.
+3. Favor small pulses near target and large pulses only when a large slew is required.
+4. Brake residual angular velocity before it creates overshoot.
+5. Preserve fuel on the long-horizon tasks.
+6. If the current rates and errors are already low, prefer idle over unnecessary firings.
+7. Output valid JSON only.
 """.strip()
 
 
@@ -149,6 +162,7 @@ def safe_post(url: str, payload: dict[str, Any], retries: int = 3, delay: float 
 def parse_llm_response(raw: str) -> dict[str, Any]:
     fallback = {
         "action_type": "idle",
+        "control_mode": "safe_hold",
         "reason": "Fallback to idle after parse failure.",
     }
     if not raw:
@@ -180,6 +194,13 @@ def build_user_prompt(obs: dict[str, Any]) -> str:
             f"Task ID: {obs.get('task_id', '')}",
             f"Difficulty: {obs.get('difficulty', '')}",
             f"Mission phase: {obs.get('mission_phase', '')}",
+            f"Mission brief: {obs.get('mission_brief', '')}",
+            f"Active directive: {obs.get('active_directive', '')}",
+            f"Pending directives count: {obs.get('pending_directives_count', 0)}",
+            f"Completed milestones: {json.dumps(obs.get('milestones_completed', []))}",
+            f"Anomaly flags: {json.dumps(obs.get('anomaly_flags', []))}",
+            f"Fuel reserve target: {obs.get('fuel_reserve_target', 0.0)}",
+            f"Phase deadline step: {obs.get('phase_deadline_step', 0)}",
             f"Current attitude (deg): {json.dumps(obs.get('current_attitude_deg', {}), sort_keys=True)}",
             f"Current angular velocity (deg/s): {json.dumps(obs.get('current_angular_velocity_dps', {}), sort_keys=True)}",
             f"Target attitude (deg): {json.dumps(obs.get('target_attitude_deg', {}), sort_keys=True)}",
@@ -188,6 +209,7 @@ def build_user_prompt(obs: dict[str, Any]) -> str:
             f"Fuel used: {obs.get('fuel_used', 0.0)}",
             f"Reward so far: {obs.get('reward_so_far', 0.0)}",
             f"Last action: {obs.get('last_action', 'none')}",
+            f"Reward breakdown: {json.dumps(obs.get('reward_breakdown', {}), sort_keys=True)}",
             f"Disturbance level: {obs.get('disturbance_level', 0.0)}",
             f"Step budget: {obs.get('step_budget', 0)}",
             f"Steps used: {obs.get('steps_used', 0)}",
@@ -210,42 +232,144 @@ def _to_axis_map(value: Any) -> dict[str, float]:
     return {"pitch": 0.0, "roll": 0.0, "yaw": 0.0}
 
 
-def deterministic_controller(observation: dict[str, Any]) -> dict[str, Any]:
+def _select_control_mode(
+    observation: dict[str, Any],
+    best_axis: str,
+    best_cmd: float,
+    best_error: float,
+    best_rate: float,
+    max_abs_error: float,
+    max_abs_rate: float,
+) -> str:
+    phase = str(observation.get("mission_phase", ""))
+    anomalies = {str(flag) for flag in observation.get("anomaly_flags", [])}
+    fuel_remaining = float(observation.get("fuel_remaining", 0.0) or 0.0)
+    fuel_reserve_target = float(observation.get("fuel_reserve_target", 0.0) or 0.0)
+    directive = str(observation.get("active_directive", "")).lower()
+
+    if anomalies:
+        if max_abs_rate > 0.18 or "recover" in directive:
+            return "recover"
+        return "safe_hold"
+    if fuel_remaining <= max(fuel_reserve_target, 0.0):
+        return "safe_hold"
+    if "detumble" in phase:
+        return "detumble"
+    if "retarget" in phase or "slew" in phase:
+        if abs(best_error) > 3.0 and abs(best_rate) < abs(best_cmd):
+            return "slew"
+        if abs(best_rate) > 0.22 and (best_error > 0) != (best_rate > 0):
+            return "brake"
+        return "trim"
+    if "coast" in phase:
+        return "hold" if max_abs_error < 1.5 else "trim"
+    if "precision" in phase:
+        return "hold" if max_abs_error < 0.8 and max_abs_rate < 0.08 else "trim"
+    if max_abs_error < 0.6 and max_abs_rate < 0.08:
+        return "hold"
+    del best_axis
+    return "trim"
+
+
+def _policy_from_params(observation: dict[str, Any], params: dict[str, float]) -> dict[str, Any]:
     errors = _to_axis_map(observation.get("attitude_error_deg", {}))
     rates = _to_axis_map(observation.get("current_angular_velocity_dps", {}))
     try:
         fuel_remaining = float(observation.get("fuel_remaining", 0.0))
     except Exception:
         fuel_remaining = 0.0
+    try:
+        fuel_reserve_target = float(observation.get("fuel_reserve_target", 0.0))
+    except Exception:
+        fuel_reserve_target = 0.0
 
     max_abs_error = max(abs(errors[axis]) for axis in ("pitch", "roll", "yaw"))
     max_abs_rate = max(abs(rates[axis]) for axis in ("pitch", "roll", "yaw"))
-    if fuel_remaining <= 0.0 or (max_abs_error < 0.25 and max_abs_rate < 0.05):
-        return {"action_type": "idle", "reason": "Low-error hold; conserving fuel."}
+    if fuel_remaining <= params["fuel_idle"] or (max_abs_error < params["idle_e"] and max_abs_rate < params["idle_r"]):
+        return {
+            "action_type": "idle",
+            "control_mode": "safe_hold" if fuel_remaining <= max(fuel_reserve_target, params["fuel_idle"]) else "hold",
+            "reason": "Low-error hold; conserving fuel.",
+        }
 
     commands: dict[str, float] = {}
     scores: dict[str, float] = {}
     for axis in ("pitch", "roll", "yaw"):
-        # PD-style command: track target error while damping angular-rate overshoot.
-        cmd = (0.65 * errors[axis]) - (1.30 * rates[axis])
+        cmd = (params["kp"] * errors[axis]) - (params["kd"] * rates[axis])
+        if str(observation.get("mission_phase", "")) == "precision_hold":
+            cmd *= params["hard_scale"]
         commands[axis] = cmd
-        scores[axis] = abs(cmd) + (0.20 * abs(errors[axis])) + (0.10 * abs(rates[axis]))
+        scores[axis] = abs(cmd) + (params["e_bonus"] * abs(errors[axis])) + (params["r_bonus"] * abs(rates[axis]))
 
     best_axis = max(scores, key=scores.get)
     best_error = errors[best_axis]
     best_rate = rates[best_axis]
     best_cmd = commands[best_axis]
 
-    if abs(best_cmd) < 0.08 and abs(best_error) < 0.45 and abs(best_rate) < 0.06:
-        return {"action_type": "idle", "reason": "Near target; avoid unnecessary firing."}
+    control_mode = _select_control_mode(
+        observation,
+        best_axis=best_axis,
+        best_cmd=best_cmd,
+        best_error=best_error,
+        best_rate=best_rate,
+        max_abs_error=max_abs_error,
+        max_abs_rate=max_abs_rate,
+    )
+
+    if abs(best_cmd) < params["cmd_idle"]:
+        return {
+            "action_type": "idle",
+            "control_mode": "hold" if control_mode not in {"recover", "safe_hold"} else control_mode,
+            "reason": "Near target; avoid unnecessary firing.",
+        }
 
     direction = "pos" if best_cmd >= 0 else "neg"
-    use_large = abs(best_error) > 9.0 or abs(best_rate) > 0.9 or abs(best_cmd) > 3.0
+    use_large = abs(best_error) > params["large_e"] or abs(best_rate) > params["large_r"] or abs(best_cmd) > params["large_cmd"]
     size = "large" if use_large else "small"
     return {
         "action_type": f"fire_{best_axis}_{direction}_{size}",
-        "reason": "Deterministic PD controller response.",
+        "control_mode": control_mode,
+        "reason": f"{control_mode} controller response.",
     }
+
+
+DETERMINISTIC_PARAMS = {
+    "kp": 0.65,
+    "kd": 1.30,
+    "hard_scale": 1.0,
+    "e_bonus": 0.20,
+    "r_bonus": 0.10,
+    "fuel_idle": 0.0,
+    "idle_e": 0.25,
+    "idle_r": 0.05,
+    "cmd_idle": 0.08,
+    "large_e": 9.0,
+    "large_r": 0.9,
+    "large_cmd": 3.0,
+}
+
+TUNED_MISSION_PARAMS = {
+    "kp": 0.4658720392155283,
+    "kd": 0.5876145072661834,
+    "hard_scale": 0.2465717883022279,
+    "e_bonus": 0.0015498199755242137,
+    "r_bonus": 0.26185103060939924,
+    "fuel_idle": 1.6848838684281833,
+    "idle_e": 0.8080114110184469,
+    "idle_r": 0.0880503995881725,
+    "cmd_idle": 0.3888568014747084,
+    "large_e": 9.137260765134043,
+    "large_r": 1.3978094874863687,
+    "large_cmd": 2.9953729477574327,
+}
+
+
+def deterministic_controller(observation: dict[str, Any]) -> dict[str, Any]:
+    return _policy_from_params(observation, DETERMINISTIC_PARAMS)
+
+
+def tuned_mission_controller(observation: dict[str, Any]) -> dict[str, Any]:
+    return _policy_from_params(observation, TUNED_MISSION_PARAMS)
 
 
 def choose_action(client: OpenAI | None, observation: dict[str, Any]) -> dict[str, Any]:
@@ -272,10 +396,14 @@ def choose_action(client: OpenAI | None, observation: dict[str, Any]) -> dict[st
 
     if "action_type" not in action:
         action = fallback_action
+    if "control_mode" not in action:
+        action["control_mode"] = fallback_action["control_mode"]
     if "reason" not in action or not isinstance(action["reason"], str) or not action["reason"].strip():
         action["reason"] = fallback_action["reason"]
     if action["action_type"] not in VALID_ACTIONS:
         action = fallback_action
+    if action["control_mode"] not in VALID_CONTROL_MODES:
+        action["control_mode"] = fallback_action["control_mode"]
     return action
 
 

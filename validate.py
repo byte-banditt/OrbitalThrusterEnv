@@ -66,6 +66,9 @@ def main() -> int:
         "Dockerfile",
         "server/requirements.txt",
         "inference.py",
+        "training/qwen3_smoke_sft.py",
+        "training/qwen3_grpo_train.py",
+        "training/evaluate_baselines.py",
         "pyproject.toml",
         "models.py",
         "client.py",
@@ -77,7 +80,7 @@ def main() -> int:
 
     runner.record(bool(manifest.get("name")), "openenv.yaml has name")
     runner.record(bool(manifest.get("version")), "openenv.yaml has version")
-    runner.record(isinstance(manifest.get("tasks"), list) and len(manifest["tasks"]) >= 3, "openenv.yaml has at least 3 tasks")
+    runner.record(isinstance(manifest.get("tasks"), list) and len(manifest["tasks"]) >= 4, "openenv.yaml has at least 4 tasks")
     runner.record(manifest.get("reward_range") == [-1.0, 1.0], "reward_range is [-1.0, 1.0]")
     runner.record(all(isinstance(task.get("id"), str) and task.get("id") for task in manifest.get("tasks", [])), "all task IDs are non-empty")
 
@@ -88,16 +91,29 @@ def main() -> int:
     runner.record(ok and isinstance(root_body, dict) and root_body.get("name") == "orbital-thruster-env", "GET / returns environment metadata")
 
     ok, tasks_body = safe_get(f"{env_url}/tasks")
-    runner.record(ok and isinstance(tasks_body, list) and len(tasks_body) >= 3, "GET /tasks returns at least 3 tasks")
+    runner.record(ok and isinstance(tasks_body, list) and len(tasks_body) >= 4, "GET /tasks returns at least 4 tasks")
 
     task_ids = [task["id"] for task in manifest.get("tasks", []) if isinstance(task, dict) and "id" in task]
-    probe_action = {"action_type": "idle", "reason": "validation probe"}
+    probe_action = {"action_type": "idle", "control_mode": "safe_hold", "reason": "validation probe"}
 
     for task_id in task_ids:
         ok, reset_body = safe_post(f"{env_url}/reset", {"task_id": task_id})
         reset_obs = reset_body.get("observation", {}) if ok and isinstance(reset_body, dict) else {}
         runner.record(ok and isinstance(reset_obs, dict) and reset_obs.get("task_id") == task_id, f"POST /reset works for {task_id}")
-        runner.record("difficulty" in reset_obs and "step_budget" in reset_obs and "target_attitude_deg" in reset_obs, f"reset observation shape is valid for {task_id}")
+        runner.record(
+            all(
+                key in reset_obs
+                for key in (
+                    "difficulty",
+                    "step_budget",
+                    "target_attitude_deg",
+                    "mission_brief",
+                    "active_directive",
+                    "reward_breakdown",
+                )
+            ),
+            f"reset observation shape is valid for {task_id}",
+        )
 
         ok, step_body = safe_post(f"{env_url}/step", {"action": probe_action})
         step_obs = step_body.get("observation", {}) if ok and isinstance(step_body, dict) else {}
@@ -105,9 +121,16 @@ def main() -> int:
         done = step_body.get("done") if ok and isinstance(step_body, dict) else None
         runner.record(ok and isinstance(step_obs, dict) and isinstance(done, bool), f"POST /step works for {task_id}")
         runner.record(isinstance(reward, (int, float)) and -1.0 <= float(reward) <= 1.0, f"step reward is bounded for {task_id}")
+        runner.record(
+            isinstance(step_obs.get("reward_breakdown"), dict) and "physical_tracking_reward" in step_obs.get("reward_breakdown", {}),
+            f"step reward rubric is exposed for {task_id}",
+        )
 
         ok, state_body = safe_get(f"{env_url}/state")
-        runner.record(ok and isinstance(state_body, dict) and bool(state_body.get("episode_id")), f"GET /state returns episode for {task_id}")
+        runner.record(
+            ok and isinstance(state_body, dict) and bool(state_body.get("episode_id")) and isinstance(state_body.get("reward_columns"), dict),
+            f"GET /state returns episode for {task_id}",
+        )
 
     print(f"{runner.passed} / {runner.total} checks passed")
     return 0 if runner.passed == runner.total else 1

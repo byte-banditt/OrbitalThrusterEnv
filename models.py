@@ -20,6 +20,16 @@ ActionType = Literal[
     "idle",
 ]
 
+ControlMode = Literal[
+    "detumble",
+    "slew",
+    "brake",
+    "trim",
+    "hold",
+    "recover",
+    "safe_hold",
+]
+
 
 class AttitudeVector(BaseModel):
     pitch: float = Field(..., description="Pitch angle or rate")
@@ -29,6 +39,7 @@ class AttitudeVector(BaseModel):
 
 class OrbitalThrusterAction(Action):
     action_type: ActionType
+    control_mode: ControlMode
     reason: str = Field(default="", max_length=240, description="Optional control rationale")
 
 
@@ -36,6 +47,13 @@ class OrbitalThrusterObservation(Observation):
     task_id: str
     difficulty: Literal["easy", "medium", "hard"]
     mission_phase: str
+    mission_brief: str
+    active_directive: str
+    pending_directives_count: int = Field(default=0, ge=0)
+    milestones_completed: list[str] = Field(default_factory=list)
+    anomaly_flags: list[str] = Field(default_factory=list)
+    fuel_reserve_target: float = Field(default=0.0, ge=0.0)
+    phase_deadline_step: int = Field(default=0, ge=0)
     current_attitude_deg: AttitudeVector
     current_angular_velocity_dps: AttitudeVector
     target_attitude_deg: AttitudeVector
@@ -52,6 +70,8 @@ class OrbitalThrusterObservation(Observation):
     last_feedback: Optional[str] = None
     done: bool = False
     reward: float = 0.0
+    reward_breakdown: dict[str, float] = Field(default_factory=dict)
+    episode_metrics: dict[str, float] = Field(default_factory=dict)
 
 
 class EnvState(State):
@@ -61,6 +81,9 @@ class EnvState(State):
     fuel_used: float = Field(default=0.0, ge=0.0)
     cumulative_reward: float = 0.0
     best_tracking_window: int = Field(default=0, ge=0)
+    milestones_completed: list[str] = Field(default_factory=list)
+    anomaly_flags: list[str] = Field(default_factory=list)
+    reward_columns: dict[str, float] = Field(default_factory=dict)
     done: bool = False
 
     @field_validator("fuel_used")

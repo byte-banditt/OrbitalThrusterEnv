@@ -6,9 +6,9 @@ runtime: fastapi
 app: server.app:app
 port: 7860
 description: >
-  An OpenEnv benchmark for satellite attitude control under mission-operations
-  constraints. Agents stabilize, retarget, and hold spacecraft orientation
-  while minimizing RCS fuel use against deterministic disturbance scenarios.
+  An OpenEnv mission-operations benchmark for long-horizon spacecraft control.
+  Agents must follow multi-phase directives, preserve fuel for delayed
+  objectives, recover from anomalies, and finish in precision hold.
 author: OpenAI Codex
 tags:
   - aerospace
@@ -16,6 +16,7 @@ tags:
   - control
   - mission-ops
   - reinforcement-learning
+  - long-horizon-planning
 reward_range: [-1.0, 1.0]
 action_space:
   - fire_pitch_pos_small
@@ -47,22 +48,35 @@ observation_space:
     - steps_used
     - time_elapsed
     - disturbance_level
+    - mission_brief
+    - active_directive
+    - pending_directives_count
+    - milestones_completed
+    - anomaly_flags
+    - fuel_reserve_target
+    - phase_deadline_step
     - last_action
     - reward_so_far
     - last_feedback
     - done
     - reward
     - success
+    - reward_breakdown
+    - episode_metrics
 tasks:
   - id: detumble_satellite
     difficulty: easy
-    description: Stabilize a newly deployed spacecraft with mild residual spin and settle on the initial target attitude.
+    description: Curriculum task. Stabilize a newly deployed spacecraft with mild residual spin and finish with a healthy fuel reserve.
     step_budget: 96
   - id: retarget_180_flip
     difficulty: medium
-    description: Execute a large retargeting maneuver and settle without excessive overshoot or wasted fuel.
+    description: Curriculum task. Respect a delayed retarget window, execute the 180-degree flip, and settle without overshoot.
     step_budget: 180
   - id: long_horizon_precision_hold
     difficulty: hard
-    description: Maintain precision pointing for a compressed long-duration mission segment under continuous disturbances.
+    description: Curriculum task. Maintain precision pointing through a long disturbance-heavy segment while protecting the reserve.
     step_budget: 480
+  - id: mission_ops_long_horizon
+    difficulty: hard
+    description: Flagship Theme #2 task. Chain detumble, coast discipline, retargeting, anomaly recovery, and precision hold in one delayed-reward mission.
+    step_budget: 360

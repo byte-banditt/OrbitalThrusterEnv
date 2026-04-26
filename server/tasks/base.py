@@ -11,6 +11,25 @@ class TimedTarget:
     start_step: int
     phase: str
     attitude_deg: tuple[float, float, float]
+    instruction: str = ""
+    deadline_step: int = 0
+    milestone: str = ""
+    recommended_modes: tuple[str, ...] = ()
+    fuel_reserve_target: float = 0.0
+    completion_tolerance_deg: float | None = None
+    completion_rate_tolerance_dps: float | None = None
+    completion_hold_steps: int = 0
+
+
+@dataclass(frozen=True)
+class MissionAnomaly:
+    start_step: int
+    end_step: int
+    flag: str
+    note: str
+    disturbance_scale: float = 1.0
+    rate_bias_dps: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    recommended_modes: tuple[str, ...] = ("recover", "safe_hold")
 
 
 @dataclass(frozen=True)
@@ -37,10 +56,12 @@ class TaskConfig:
     difficulty: str
     title: str
     description: str
+    mission_brief: str
     mission_summary: str
     initial_attitude_deg: tuple[float, float, float]
     initial_rates_dps: tuple[float, float, float]
     target_schedule: tuple[TimedTarget, ...]
+    anomaly_schedule: tuple[MissionAnomaly, ...]
     step_budget: int
     time_step_seconds: float
     inertia: tuple[float, float, float]
@@ -57,6 +78,7 @@ class TaskConfig:
     on_target_fraction_success: float
     overshoot_budget: float
     early_success_allowed: bool
+    required_milestones: int
     pointing_scale_deg: float
     fuel_penalty_coeff: float
     stability_penalty_coeff: float
@@ -76,23 +98,55 @@ class MissionTask(ABC):
     def difficulty(self) -> str:
         return self.config.difficulty
 
-    def target_for_step(self, step: int) -> tuple[float, float, float]:
+    def directive_for_step(self, step: int) -> TimedTarget:
         target = self.config.target_schedule[0]
         for candidate in self.config.target_schedule:
             if step >= candidate.start_step:
                 target = candidate
             else:
                 break
-        return target.attitude_deg
+        return target
+
+    def target_for_step(self, step: int) -> tuple[float, float, float]:
+        return self.directive_for_step(step).attitude_deg
 
     def phase_for_step(self, step: int) -> str:
-        target = self.config.target_schedule[0]
-        for candidate in self.config.target_schedule:
-            if step >= candidate.start_step:
-                target = candidate
-            else:
-                break
-        return target.phase
+        return self.directive_for_step(step).phase
+
+    def pending_directives_count(self, step: int) -> int:
+        return sum(1 for directive in self.config.target_schedule if directive.start_step > step)
+
+    def anomalies_for_step(self, step: int) -> tuple[MissionAnomaly, ...]:
+        return tuple(
+            anomaly
+            for anomaly in self.config.anomaly_schedule
+            if anomaly.start_step <= step <= anomaly.end_step
+        )
+
+    def anomaly_flags_for_step(self, step: int) -> list[str]:
+        return [anomaly.flag for anomaly in self.anomalies_for_step(step)]
+
+    def anomaly_rate_bias_for_step(self, step: int) -> dict[str, float]:
+        total = {axis: 0.0 for axis in AXES}
+        for anomaly in self.anomalies_for_step(step):
+            for axis, value in zip(AXES, anomaly.rate_bias_dps):
+                total[axis] += value
+        return total
+
+    def disturbance_scale_for_step(self, step: int) -> float:
+        scale = 1.0
+        for anomaly in self.anomalies_for_step(step):
+            scale *= anomaly.disturbance_scale
+        return scale
+
+    def recommended_modes_for_step(self, step: int) -> tuple[str, ...]:
+        directive = self.directive_for_step(step)
+        modes = list(directive.recommended_modes)
+        for anomaly in self.anomalies_for_step(step):
+            for mode in anomaly.recommended_modes:
+                if mode not in modes:
+                    modes.append(mode)
+        return tuple(modes)
 
     def target_switch_step(self) -> int:
         if len(self.config.target_schedule) < 2:
@@ -119,7 +173,10 @@ class MissionTask(ABC):
             "description": self.config.description,
             "step_budget": self.config.step_budget,
             "fuel_capacity": self.config.fuel_capacity,
+            "mission_brief": self.config.mission_brief,
             "mission_summary": self.config.mission_summary,
+            "directive_count": len(self.config.target_schedule),
+            "anomaly_flags": [anomaly.flag for anomaly in self.config.anomaly_schedule],
         }
 
 
