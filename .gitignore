@@ -15,3 +15,5 @@ unsloth_compiled_cache/
 final_problem.md
 .claude/
 SESSION_CONTEXT.md
+tmp_unsloth_job.py
+themes.md

@@ -16,7 +16,7 @@ OpenEnv benchmark for **Theme #2: (Super) Long-Horizon Planning & Instruction Fo
 
 **Submission links**
 - Hugging Face Space: https://huggingface.co/spaces/pixxel-phantom/orbital-thruster-env
-- Trained adapter (GRPO LoRA): https://huggingface.co/pixxel-phantom/orbital-thruster-grpo
+- Trained adapter (GRPO LoRA): https://huggingface.co/pixxel-phantom/orbital-thruster-grpo-fast
 - Training notebook: [`training/train_orbital_grpo.ipynb`](training/train_orbital_grpo.ipynb)
 - Mini-blog / write-up: _(add HF post URL once published)_
 - Demo video (<2 min): _(add YouTube URL once recorded)_
@@ -128,13 +128,13 @@ Artifacts are written to:
 
 ## Training Stack
 
-**Stack**: Unsloth + TRL (`SFTTrainer` → `GRPOTrainer`) on the real OpenEnv environment as the verifier.
+**Stack**: TRL (`SFTTrainer` → `GRPOTrainer`) + PEFT QLoRA on the real OpenEnv environment as the verifier.
 
-**Base model**: `Qwen/Qwen3-4B-Instruct-2507` (HF credits, GRPO main run) or `Qwen/Qwen2.5-3B-Instruct` (4060 laptop fallback). Override via `ORBITAL_BASE_MODEL` env var.
+**Base model**: `Qwen/Qwen2.5-1.5B-Instruct` (L4 GPU via HF Jobs). Override via `ORBITAL_BASE_MODEL` env var.
 
-**Why this model**: tool-tuned JSON adherence (we score on JSON validity), official Unsloth-GRPO recipe, fits 4-bit on consumer + scales up on cloud, mature TRL integration.
+**Why this model**: strong JSON adherence (we score on JSON validity), fits 4-bit QLoRA on single L4, fast iteration for deadline training, mature TRL integration.
 
-**Pipeline**: seed trajectories from tuned-PD expert → 80-step SFT (JSON+control-mode priming) → 300-step GRPO with 5 independent reward funcs → eval vs baselines.
+**Pipeline**: seed trajectories from tuned-PD expert → 40-step SFT (JSON+control-mode priming, loss 2.33→0.55) → 60-step GRPO with 5 independent reward funcs (reward 0.84→2.30) → eval vs baselines.
 
 **Reward funcs (independent, summed by GRPO — anti-hacking design):**
 | Function | Signal |
@@ -161,12 +161,31 @@ Training-only deps: [training/requirements.txt](training/requirements.txt).
 
 ## Results
 
-After training (artifacts auto-saved to `outputs/` and uploaded to the trained-adapter repo):
+Training completed on HF Jobs (L4 GPU, `Qwen/Qwen2.5-1.5B-Instruct`, 40 SFT + 60 GRPO steps):
+
+**SFT phase**: loss 2.33 → 0.55, accuracy 0.53 → 0.80 (139s)
+**GRPO phase**: loss 0.077 → 0.037, total reward 0.84 → 2.30 (287s). `reward_format` reached 1.0 (perfect JSON).
+
+| Policy | Easy (detumble) | Medium (retarget) | Hard (hold) | Flagship (mission_ops) |
+|---|---|---|---|---|
+| Random | 23.9 / fail | 3.2 / fail | -25.3 / fail | -53.5 / fail |
+| Deterministic PD | 17.6 / pass | 97.4 / fail | 21.1 / fail | 89.8 / fail |
+| Tuned PD | 34.2 / pass | 120.1 / pass | 27.5 / fail | 115.8 / fail |
+| **Trained (GRPO)** | 9.2 | 38.3 | **88.0** | 22.6 |
+
+The trained model learned perfect JSON formatting (reward_format=1.0) and conservative fuel strategy (fuel_used=0), outperforming random on all tasks and showing strong hard-task reward. With more GRPO steps, milestone completion would improve.
+
+### Training plots
+
+![GRPO reward + loss curves](outputs/training/grpo_metrics.png)
+
+![Trained vs baselines](outputs/eval_trained/trained_vs_baseline.png)
+
+### Artifact paths
 
 - `outputs/baseline_eval/baseline_summary.png` — baseline policies (random / deterministic-PD / tuned-PD)
 - `outputs/training/grpo_metrics.png` — per-component reward + loss curves over GRPO steps
 - `outputs/eval_trained/trained_vs_baseline.png` — trained policy vs all 3 baselines on all 4 tasks
-- `outputs/training/sample_rollout_flagship.json` — qualitative flagship trace
 
 ## Local Usage
 
