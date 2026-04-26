@@ -1,22 +1,19 @@
-venv/
-.agents/
+# Dev/IDE
+.git/
+.claude/
 .codex/
-outputs/
+.agents/
+.cursor/
+.vscode/
+
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+venv/
 .venv/
-*.engg-info/
-[Ee]xternal*
-*.pdf
 venv310_gpu/
-*.egg-info
-server/__pycache__/
-unsloth_compiled_cache/
-final_problem.md
-.claude/
-SESSION_CONTEXT.md
-tmp_unsloth_job.py
-themes.md
+
 # Training artifacts (large, not needed on Space)
 trainer_output/.cache/
 trainer_output/trainer_output
