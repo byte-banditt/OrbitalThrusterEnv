@@ -5,12 +5,10 @@
 #     "huggingface_hub>=0.26.0",
 #     "torch>=2.6.0",
 #     "torchvision",
-#     "unsloth>=2025.10.1",
-#     "unsloth_zoo>=2025.10.1",
-#     "trl>=0.21.0",
-#     "transformers>=4.55.0",
+#     "trl==0.18.2",
+#     "transformers==4.51.3",
 #     "datasets>=3.1.0",
-#     "accelerate>=1.7.0",
+#     "accelerate>=1.0.0,<1.7.0",
 #     "peft>=0.15.0",
 #     "bitsandbytes>=0.45.0",
 #     "matplotlib>=3.9.0",
@@ -74,8 +72,15 @@ def main() -> None:
     if not seed_path.exists():
         run([sys.executable, "training/generate_seed_trajectories.py"], cwd=repo)
 
-    run([sys.executable, "training/qwen3_smoke_sft.py"], cwd=repo)
-    run([sys.executable, "training/qwen3_grpo_train.py"], cwd=repo)
+    use_vanilla = os.environ.get("ORBITAL_VANILLA", "0") == "1"
+    if use_vanilla:
+        sft_steps = os.environ.get("ORBITAL_SFT_STEPS", "40")
+        grpo_steps = os.environ.get("ORBITAL_GRPO_STEPS", "80")
+        run([sys.executable, "training/local_train.py", "--phase", "all",
+             "--sft-steps", sft_steps, "--grpo-steps", grpo_steps], cwd=repo)
+    else:
+        run([sys.executable, "training/qwen3_smoke_sft.py"], cwd=repo)
+        run([sys.executable, "training/qwen3_grpo_train.py"], cwd=repo)
     run([sys.executable, "training/eval_trained_model.py"], cwd=repo)
 
     api = HfApi()

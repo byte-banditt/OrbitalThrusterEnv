@@ -14,3 +14,4 @@ server/__pycache__/
 unsloth_compiled_cache/
 final_problem.md
 .claude/
+SESSION_CONTEXT.md
