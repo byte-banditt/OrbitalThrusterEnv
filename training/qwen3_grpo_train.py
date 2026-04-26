@@ -57,18 +57,29 @@ def main() -> None:
         lora_alpha=32, lora_dropout=0.0,
     )
 
-    if SFT_OUTPUT_DIR.exists() and any(SFT_OUTPUT_DIR.iterdir()):
+    skip_warm = os.environ.get("ORBITAL_SKIP_SFT_WARMUP", "0") == "1"
+    if not skip_warm and SFT_OUTPUT_DIR.exists() and any(SFT_OUTPUT_DIR.iterdir()):
         try:
             from safetensors.torch import load_file
             adapter_file = next(SFT_OUTPUT_DIR.glob("**/adapter_model.safetensors"), None)
             if adapter_file is not None:
-                state = load_file(str(adapter_file))
-                missing, unexpected = model.load_state_dict(state, strict=False)
-                print(f"Warm-started from SFT adapter: {SFT_OUTPUT_DIR} (missing={len(missing)}, unexpected={len(unexpected)})")
+                raw_state = load_file(str(adapter_file))
+                target_state = model.state_dict()
+                fixed: dict = {}
+                for k, v in raw_state.items():
+                    if k in target_state:
+                        fixed[k] = v.to(target_state[k].dtype)
+                if fixed:
+                    missing, unexpected = model.load_state_dict(fixed, strict=False)
+                    print(f"Warm-started from SFT adapter: {SFT_OUTPUT_DIR} (loaded={len(fixed)}, missing={len(missing)}, unexpected={len(unexpected)})")
+                else:
+                    print(f"SFT adapter keys did not match model; using fresh LoRA.")
             else:
                 print(f"No adapter_model.safetensors under {SFT_OUTPUT_DIR}; using fresh LoRA.")
         except Exception as exc:
             print(f"Could not load SFT adapter ({exc}); using fresh LoRA.")
+    else:
+        print(f"Skipping SFT warm-start (skip={skip_warm}).")
 
     def to_chat_prompt(observation: dict) -> str:
         return tokenizer.apply_chat_template(
