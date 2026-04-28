@@ -18,8 +18,6 @@ OpenEnv benchmark for **Theme #2: (Super) Long-Horizon Planning & Instruction Fo
 - Hugging Face Space: https://huggingface.co/spaces/pixxel-phantom/orbital-thruster-env
 - Trained adapter (GRPO LoRA): https://huggingface.co/pixxel-phantom/orbital-thruster-grpo-fast
 - Training notebook: [`training/train_orbital_grpo.ipynb`](training/train_orbital_grpo.ipynb)
-- Mini-blog / write-up: _(add HF post URL once published)_
-- Demo video (<2 min): _(add YouTube URL once recorded)_
 
 **Pitch**: early waste breaks later phases. A controller that looks good on short-horizon pointing can still fail the flagship mission because it burns fuel before the retarget, mishandles the anomaly, or reaches the final hold phase with no reserve left.
 
