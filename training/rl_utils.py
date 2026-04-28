@@ -227,10 +227,16 @@ def make_lora_controller(adapter_dir: str | Path, base_model: str = DEFAULT_MODE
     from peft import PeftModel
 
     adapter_dir = str(adapter_dir)
+    from transformers import BitsAndBytesConfig
+    bnb = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        bnb_4bit_quant_type="nf4",
+    )
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        quantization_config=bnb,
         device_map="auto",
     )
     model = PeftModel.from_pretrained(model, adapter_dir)

@@ -55,7 +55,7 @@ def build_model_and_tokenizer():
         LOCAL_MODEL,
         quantization_config=bnb,
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        device_map="auto",
+        device_map={"": 0},
     )
     return model, tokenizer
 
@@ -131,6 +131,9 @@ def run_grpo(max_steps: int = 120) -> None:
     from trl import GRPOConfig, GRPOTrainer
 
     print(f"[local_train] GRPO model={LOCAL_MODEL}")
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
     model, tokenizer = build_model_and_tokenizer()
     if SFT_OUTPUT_DIR.exists() and any(SFT_OUTPUT_DIR.iterdir()):
         try:
@@ -171,8 +174,8 @@ def run_grpo(max_steps: int = 120) -> None:
         train_dataset=dataset,
         args=GRPOConfig(
             output_dir=str(GRPO_OUTPUT_DIR),
-            num_generations=4,
-            max_completion_length=96,
+            num_generations=2,
+            max_completion_length=64,
             max_prompt_length=1280,
             per_device_train_batch_size=1,
             gradient_accumulation_steps=4,

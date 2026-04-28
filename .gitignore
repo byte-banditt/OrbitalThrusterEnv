@@ -20,6 +20,7 @@ themes.md
 # Training artifacts (large, not needed on Space)
 trainer_output/.cache/
 trainer_output/trainer_output
+trainer_output/
 trainer_output_remote/
 unsloth_compiled_cache/
 
