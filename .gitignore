@@ -1,28 +1,32 @@
+# Virtual environments
 venv/
-.agents/
-.codex/
-outputs/
+.venv/
+venv310_gpu/
+
+# Python
 __pycache__/
 *.pyc
-.venv/
-*.engg-info/
-[Ee]xternal*
-*.pdf
-venv310_gpu/
-*.egg-info
-server/__pycache__/
-unsloth_compiled_cache/
-final_problem.md
-.claude/
-SESSION_CONTEXT.md
-tmp_unsloth_job.py
-themes.md
-# Training artifacts (large, not needed on Space)
-trainer_output/.cache/
-trainer_output/trainer_output
+*.egg-info/
+
+# Training model weights (large, regenerable from HF)
 trainer_output/
 trainer_output_remote/
 unsloth_compiled_cache/
+training/unsloth_compiled_cache/
+
+# Training data (regenerable via generate_seed_trajectories.py)
+training/data/
+
+# Outputs: keep evaluation results and plots, exclude raw logs
+outputs/logs/
+outputs/evals/
+
+# Agent/IDE tooling
+.agents/
+.codex/
+.claude/
+.cursor/
+.vscode/
 
 # Temp/session files
 tmp_unsloth_job.py

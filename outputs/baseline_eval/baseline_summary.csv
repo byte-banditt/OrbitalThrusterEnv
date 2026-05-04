@@ -1,0 +1,13 @@
+policy,task_id,success,reward_total,fuel_used,steps_used,milestones_completed_count,directive_completion_ratio
+random,detumble_satellite,0,23.864501,69.5,96,0,0.0
+random,retarget_180_flip,0,3.216328,120.0,180,0,0.0
+random,long_horizon_precision_hold,0,-25.327257,85.0,480,0,0.0
+random,mission_ops_long_horizon,0,-53.481871,90.0,360,0,0.0
+deterministic,detumble_satellite,1,17.555011,18.7,25,1,1.0
+deterministic,retarget_180_flip,0,97.372752,120.0,180,2,1.0
+deterministic,long_horizon_precision_hold,0,21.102498,85.0,480,0,0.0
+deterministic,mission_ops_long_horizon,0,89.830747,90.0,360,2,0.4
+tuned_pd,detumble_satellite,1,34.201637,16.8,42,1,1.0
+tuned_pd,retarget_180_flip,1,120.127096,100.9,164,1,0.5
+tuned_pd,long_horizon_precision_hold,0,27.487283,83.64,480,0,0.0
+tuned_pd,mission_ops_long_horizon,0,115.836782,88.8,360,0,0.0

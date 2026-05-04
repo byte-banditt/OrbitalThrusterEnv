@@ -1,4 +1,4 @@
-# Dev/IDE
+# Dev/IDE tooling
 .git/
 .claude/
 .codex/
@@ -14,11 +14,18 @@ venv/
 .venv/
 venv310_gpu/
 
-# Training artifacts (large, not needed on Space)
-trainer_output/.cache/
-trainer_output/trainer_output
+# Training model weights (too large for HF Space)
+trainer_output/
 trainer_output_remote/
 unsloth_compiled_cache/
+training/unsloth_compiled_cache/
+
+# Training data (regenerable)
+training/data/
+
+# Outputs: keep evaluation PNGs and CSVs, exclude empty placeholder dirs
+outputs/logs/
+outputs/evals/
 
 # Temp/session files
 tmp_unsloth_job.py

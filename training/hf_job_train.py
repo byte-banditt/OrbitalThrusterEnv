@@ -74,8 +74,8 @@ def main() -> None:
 
     use_vanilla = os.environ.get("ORBITAL_VANILLA", "0") == "1"
     if use_vanilla:
-        sft_steps = os.environ.get("ORBITAL_SFT_STEPS", "40")
-        grpo_steps = os.environ.get("ORBITAL_GRPO_STEPS", "80")
+        sft_steps = str(int(os.environ.get("ORBITAL_SFT_STEPS", "40")))
+        grpo_steps = str(int(os.environ.get("ORBITAL_GRPO_STEPS", "80")))
         run([sys.executable, "training/local_train.py", "--phase", "all",
              "--sft-steps", sft_steps, "--grpo-steps", grpo_steps], cwd=repo)
     else:
