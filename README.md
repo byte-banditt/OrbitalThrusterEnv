@@ -19,8 +19,6 @@ OpenEnv benchmark for **Theme #2: (Super) Long-Horizon Planning & Instruction Fo
 - Trained adapter (GRPO LoRA, 1.5B): https://huggingface.co/pixxel-phantom/orbital-thruster-grpo-fast
 - Trained adapter (GRPO LoRA, 4B): https://huggingface.co/pixxel-phantom/orbital-thruster-grpo
 - Mini-blog / write-up: https://huggingface.co/spaces/pixxel-phantom/orbital-thruster-env/blob/main/BLOG.md
-
-=======
 - Trained adapter (GRPO LoRA): https://huggingface.co/pixxel-phantom/orbital-thruster-grpo-fast
 - Training notebook: [`training/train_orbital_grpo.ipynb`](training/train_orbital_grpo.ipynb)
 
