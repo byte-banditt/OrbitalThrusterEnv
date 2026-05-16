@@ -30,7 +30,7 @@ def main() -> None:
         raise SystemExit("Install training/requirements.txt before running SFT.") from exc
 
     seed_path = ROOT / "training" / "data" / "seed_trajectories.jsonl"
-    records = ensure_records(seed_path)[:256]
+    records = ensure_records(seed_path)[:384]
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=DEFAULT_MODEL,
@@ -69,7 +69,7 @@ def main() -> None:
         dataset_text_field="text",
         args=SFTConfig(
             output_dir=str(SFT_OUTPUT_DIR),
-            max_steps=int(os.environ.get("ORBITAL_SFT_STEPS", "80")),
+            max_steps=int(os.environ.get("ORBITAL_SFT_STEPS", "150")),
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
             learning_rate=2e-4,

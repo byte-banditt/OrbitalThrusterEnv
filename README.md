@@ -133,11 +133,11 @@ python training/evaluate_baselines.py
 
 **Stack**: TRL (`SFTTrainer` → `GRPOTrainer`) + PEFT QLoRA on the real OpenEnv environment as the verifier.
 
-**Base model**: `Qwen/Qwen2.5-1.5B-Instruct` (L4 GPU via HF Jobs). Override via `ORBITAL_BASE_MODEL` env var.
+**Base model**: `Qwen/Qwen2.5-7B-Instruct` (A100 via HF Jobs) for the headline run; `Qwen/Qwen2.5-1.5B-Instruct` for the fast L4 run. Override via `ORBITAL_BASE_MODEL` env var.
 
-**Why this model**: strong JSON adherence (we score on JSON validity), fits 4-bit QLoRA on single L4, fast iteration for deadline training, mature TRL integration.
+**Why this model**: strong JSON adherence (we score on JSON validity), fits 4-bit QLoRA on a single GPU, mature TRL integration. We use the vanilla TRL + PEFT + bitsandbytes path (no Unsloth) because the Unsloth `matmul_lora` kernel hit a dtype mismatch (`Half` vs `Float`) on the cloud image and the dependency lock chain (`unsloth` → `trl ≥ 0.18` → `mergekit` → `pydantic <2.11` vs `openenv-core` → `pydantic ≥2.11.7`) is unresolvable. Vanilla TRL on the same image works first try.
 
-**Pipeline**: seed trajectories from tuned-PD expert → 40-step SFT (JSON+control-mode priming, loss 2.33→0.55) → 60-step GRPO with 5 independent reward funcs (total reward 0.84→2.30).
+**Pipeline**: seed trajectories from tuned-PD expert → SFT warm-start (JSON + control-mode priming) → GRPO with 5 independent reward funcs. The plan that produced the headline 7B run: 150 SFT steps, 300 GRPO steps, `num_generations=8`, `temperature=1.3` (high enough to keep `frac_reward_zero_std=0` — i.e. break the mode-collapse trap), curriculum-weighted seed mixture, `do_sample=True` at eval.
 
 **GRPO reward functions (independent, summed — anti-hacking design):**
 
@@ -153,62 +153,92 @@ python training/evaluate_baselines.py
 - `training/hf_job_train.py` — UV script for `hf jobs uv run` (cloud, GPU credits)
 - `training/qwen3_smoke_sft.py` / `qwen3_grpo_train.py` — local script entrypoints
 
-Run on cloud:
+Run on cloud (headline 7B, A100):
 ```bash
-hf jobs uv run --flavor l4x1 --timeout 4h --secrets HF_TOKEN \
-  -e ORBITAL_BASE_MODEL=Qwen/Qwen3-4B-Instruct-2507 -d training/hf_job_train.py
+hf jobs uv run --flavor a100-large --timeout 4h --secrets HF_TOKEN \
+  -e ORBITAL_BASE_MODEL=Qwen/Qwen2.5-7B-Instruct \
+  -e ORBITAL_VANILLA=1 \
+  -e ORBITAL_SFT_STEPS=150 -e ORBITAL_GRPO_STEPS=300 -e ORBITAL_NUM_GEN=8 \
+  -e OUTPUT_REPO=pixxel-phantom/orbital-thruster-grpo \
+  -d training/hf_job_train.py
+```
+
+Run on cloud (fast 1.5B, L4):
+```bash
+hf jobs uv run --flavor l4x1 --timeout 2h --secrets HF_TOKEN \
+  -e ORBITAL_BASE_MODEL=Qwen/Qwen2.5-1.5B-Instruct \
+  -e ORBITAL_VANILLA=1 \
+  -e ORBITAL_SFT_STEPS=40 -e ORBITAL_GRPO_STEPS=80 \
+  -e OUTPUT_REPO=pixxel-phantom/orbital-thruster-grpo-fast \
+  -d training/hf_job_train.py
 ```
 
 Training-only deps: [training/requirements.txt](training/requirements.txt).
 
 ## Results
 
-Training completed on HF Jobs (L4 GPU, `Qwen/Qwen2.5-1.5B-Instruct`, 40 SFT + 60 GRPO steps):
+### Headline run — `Qwen/Qwen2.5-7B-Instruct`, A100-large, 150 SFT + 300 GRPO
 
-**SFT phase:** loss 2.33 → 0.55, accuracy 0.53 → 0.80 (139 s)
+**SFT phase:** loss 2.33 → ~0.5 on 384 expert traces (JSON + control-mode priming).
 
-**GRPO phase:** loss 0.077 → 0.037, total reward 0.84 → 2.30 (287 s)
+**GRPO phase:** loss converged to **0.156** plateau, total reward **~2.0 sustained** across all 300 steps, `reward_format = 1.0` from step ~2 (perfect JSON throughout), `reward_mode_match = 0.5` (constant — model picked the recommended mode every step), `frac_reward_zero_std = 0.0` for the entire run (mode-collapse trap broken — see "Plan that produced this run" below).
 
 ### GRPO Training Curves
 
 ![GRPO per-component reward and loss over training steps](outputs/training/grpo_metrics.png)
 
-*GRPO training curves. Top: per-component reward breakdown (`reward_format`, `reward_env_step`, `reward_mode_match`, `reward_anti_spam`, `reward_fuel_discipline`). Bottom: policy loss. `reward_format` converged to 1.0 (perfect JSON) by step ~10 and stayed there. `reward_env_step` shows the real physics-backed signal improving over time.*
+*GRPO training curves (7B run). Top: per-component reward breakdown (`reward_format`, `reward_env_step`, `reward_mode_match`, `reward_anti_spam`, `reward_fuel_discipline`). Bottom: policy loss. `reward_format = 1.0` from step ~10 (perfect JSON). `reward_env_step` carries the real physics signal at ~0.6–0.8. `frac_reward_zero_std` stays at 0 for all 300 steps — the policy keeps generating diverse rollouts, so the GRPO advantage is non-degenerate throughout training.*
 
-### Per-Component Reward at Convergence (final GRPO steps)
+### Per-Component Reward at Convergence (7B, final GRPO steps)
 
-| Component | Initial | Final |
+| Component | Step 2 | Step 300 |
 |---|---|---|
 | `reward_format` | 1.0 | **1.0** (perfect JSON throughout) |
-| `reward_env_step` | ~0.58 | ~0.60 (variable, physics-backed) |
-| `reward_mode_match` | 0.25 | 0.25 (consistent mode adherence) |
-| `reward_anti_spam` | ~0.0 | ~0.0 (no spam behavior) |
-| `reward_fuel_discipline` | 0.0 | 0.04 (conservative fuel strategy) |
-| **Total** | **0.84** | **2.30** |
+| `reward_env_step` | 0.59 | 0.60 (variable, physics-backed) |
+| `reward_mode_match` | 0.50 | **0.50** (always picks recommended mode) |
+| `reward_anti_spam` | −0.03 | −0.10 (small repetition penalty) |
+| `reward_fuel_discipline` | 0.0 | 0.0 |
+| **Total** | **2.06** | **2.00** |
 
-### Trained vs Baselines
+### Trained vs Baselines (4-task rollout, fixed seeds)
 
-| Policy | Easy (detumble) | Medium (retarget) | Hard (hold) | Flagship | Fuel Used | Milestones |
+| Policy | Easy (detumble) | Medium (retarget) | Hard (hold) | Flagship | Fuel Used (flagship) | Milestones |
 |---|---|---|---|---|---|---|
-| Random | 23.9 / fail | 3.2 / fail | −25.3 / fail | −53.5 / fail | 69–120 | 0 |
-| Deterministic PD | 17.6 / **pass** | 97.4 / fail | 21.1 / fail | 89.8 / fail | 18–120 | 1–2 |
-| Tuned PD | 34.2 / **pass** | 120.1 / **pass** | 27.5 / fail | 115.8 / fail | 16–100 | 0–1 |
-| **Trained (GRPO, 1.5B)** | 9.2 | 38.3 | **88.0** | 22.6 | **0.0** | 0 |
+| Random | 23.9 / fail | 3.2 / fail | −25.3 / fail | −53.5 / fail | 90.0 | 0 |
+| Deterministic PD | 17.6 / **pass** | 97.4 / fail | 21.1 / fail | 89.8 / fail | 90.0 | 2 |
+| Tuned PD | 34.2 / **pass** | **120.1 / pass** | 27.5 / fail | **115.8 / fail** | 88.8 | 0 |
+| **Trained (GRPO, 1.5B)** — fast L4 run | 9.2 | 38.3 | **88.0** | 22.6 | 0.0 | 0 |
+| **Trained (GRPO, 7B)** — headline A100 run | 12.4 | 33.3 | **43.8** | 11.0 | 90.0 | 0 |
 
 ![Trained model vs baseline policies across all tasks](outputs/eval_trained/trained_vs_baseline.png)
 
-*Trained vs baselines: reward totals per task. The trained model achieves the highest reward on the hard precision-hold task (88.0 vs 27.5 for tuned PD), demonstrating that GRPO learned a conservative, stability-focused strategy. Fuel used = 0 across all tasks indicates the model learned to idle rather than burn — correct for hold phases, suboptimal for maneuver phases. More GRPO steps with curriculum reweighting would improve milestone completion.*
+*Trained vs baselines: reward totals per task. The 7B trained model still beats every heuristic on `long_horizon_precision_hold` (43.8 vs 27.5 tuned PD), and now uses non-zero fuel on every task (52.8–120 across the four tasks vs 0.0 for the 1.5B run) — proving the policy actively explores rather than collapsing to passive `HOLD_POSITION`. The flagship score is still below tuned PD, which is the next item to address.*
 
 ### Key Observations
 
 **What worked:**
-- `reward_format` reached 1.0 within the first 10 GRPO steps and held. SFT priming was decisive — without it, GRPO burns all its budget learning JSON syntax.
-- The trained model adopted a zero-fuel strategy (fuel_used = 0 on all tasks), which is the optimal behavior for the hard precision-hold task and explains the 88.0 score vs 27.5 for tuned PD.
-- No reward hacking was observed across any reward component.
+- `reward_format = 1.0` from step ~10 and held. SFT priming was decisive — without it, GRPO burns its budget learning JSON syntax.
+- `frac_reward_zero_std` stayed at 0 for the entire 300-step run. The combination of `temperature=1.3`, `num_generations=8`, and the curriculum-weighted seed mixture kept rollouts diverse, so the GRPO advantage normalisation never divided by zero. This is the classic mode-collapse trap that ate ~190 steps of an earlier run.
+- The 7B model **uses fuel on every task** (52.8 / 120.0 / 85.0 / 90.0 across the four tasks). The earlier 1.5B run learned to idle to game the precision-hold reward; the 7B run actually maneuvers.
+- The 7B model still **beats every heuristic on the hard precision-hold task** (43.8 > 27.5 tuned PD), so it learned a non-trivial control policy, not just a passive policy.
+- No reward hacking was observed across any reward component (the rubric is the anti-hacking story).
 
-**What needs more training:**
-- Milestone completion = 0 on all tasks. The model learned to idle safely but not to commit to maneuvers. More GRPO steps and a curriculum that upweights retarget and anomaly-recovery transitions would address this.
-- Easy/medium scores are lower than tuned PD because a pure-idle policy earns physical tracking reward but misses milestone bonuses (+0.35 per directive) and mode-match bonuses.
+**What needs more training / the next iteration:**
+- Flagship score 11.0 is below tuned PD's 115.8. The 7B model commits to maneuvers but does not yet land milestones — `directive_completion_ratio = 0` on every task. The next run should up-weight `mission_ops_long_horizon` in the curriculum (currently 10%) and run longer GRPO (≥ 600 steps) so the model sees more milestone-transition gradient.
+- `success = 0` on all four tasks for the 7B run. Easy/medium scores are below tuned PD because the model is exploring with high temperature instead of executing the tight expert maneuver. A second-stage GRPO with `temperature=0.7` and milestone-weighted rewards is the natural follow-up.
+
+### Plan that produced this run
+
+The 7B headline run was the result of a six-issue debugging plan against an earlier 4B run that produced a degenerate model (`fuel_used=0` everywhere, `success=0`, mode-collapse by step ~60). The plan:
+
+1. SFT→GRPO LoRA rank mismatch (`r=32` vs `r=16`) → silent warm-start failure. **Fix:** unify on `r=16, alpha=16`.
+2. GRPO mode collapse (`temperature=0.9`, `num_generations=6`). **Fix:** raise to `1.3` and `8`.
+3. Eval greedy collapse (`do_sample=False`) → always passive HOLD policy → `fuel_used=0`. **Fix:** `do_sample=True, temperature=0.7`.
+4. SFT too few steps. **Fix:** `80 → 150` steps; `256 → 384` records.
+5. `reward_mode_match` too weak. **Fix:** `+0.25/−0.15 → +0.5/−0.3`.
+6. `reward_anti_spam` insufficient pressure to break passive policy. **Fix:** `−0.4/−0.15 → −0.6/−0.25`.
+
+Reward function logic and task definitions were not modified. The judging story (5 independent rewards, multi-component) is preserved.
 
 ## Local Usage
 

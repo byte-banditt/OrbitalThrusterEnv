@@ -3,14 +3,15 @@
 # requires-python = ">=3.10,<3.13"
 # dependencies = [
 #     "huggingface_hub>=0.26.0",
-#     "torch>=2.6.0",
+#     "torch>=2.7.0,<2.8.0",
 #     "torchvision",
-#     "trl==0.18.2",
-#     "transformers==4.51.3",
+#     "trl>=0.17.0,<0.18.0",
+#     "transformers>=4.51.0",
 #     "datasets>=3.1.0",
 #     "accelerate>=1.0.0,<1.7.0",
 #     "peft>=0.15.0",
 #     "bitsandbytes>=0.45.0",
+#     "unsloth>=2025.10,<2026.0",
 #     "matplotlib>=3.9.0",
 #     "pyyaml",
 #     "fastapi",

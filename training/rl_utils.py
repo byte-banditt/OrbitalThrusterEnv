@@ -55,8 +55,11 @@ def _safe_parse(raw: str) -> dict[str, str] | None:
     return None
 
 
-# ------------------------- Reward functions -------------------------
-
+# Five independent reward functions consumed by `GRPOTrainer.reward_funcs`. Keeping them
+# split (instead of summing into one scalar) is the anti-reward-hacking story: the model
+# has to satisfy JSON validity, physics-backed env step, control-mode discipline, action
+# variety, and fuel discipline at the same time -- gaming any single one shows up as a
+# regression in another.
 def reward_format(completions, **_kwargs) -> list[float]:
     rewards = []
     for completion in completions:
@@ -117,9 +120,9 @@ def reward_mode_match(completions, task_id, history_actions, **_kwargs) -> list[
             if not recommended:
                 rewards.append(0.0)
             elif parsed["control_mode"] in recommended:
-                rewards.append(0.25)
+                rewards.append(0.5)
             else:
-                rewards.append(-0.15)
+                rewards.append(-0.3)
         except Exception:
             rewards.append(0.0)
     return rewards
@@ -138,9 +141,9 @@ def reward_anti_spam(completions, history_actions, **_kwargs) -> list[float]:
             recent.append(parsed["action_type"])
             top_count = Counter(recent).most_common(1)[0][1]
             if top_count >= 6:
-                rewards.append(-0.4)
+                rewards.append(-0.6)
             elif top_count >= 4:
-                rewards.append(-0.15)
+                rewards.append(-0.25)
             else:
                 rewards.append(0.05)
         except Exception:
@@ -188,8 +191,9 @@ REWARD_FUNCS: list[Callable] = [
 ]
 
 
-# ------------------------- Curriculum sampling -------------------------
-
+# Curriculum mix used when building the GRPO prompt dataset: heavier weight on the easier
+# tasks so the policy keeps a stable JSON/control-mode baseline, with a smaller slice of
+# the long-horizon flagship to push it to learn the directive sequence.
 CURRICULUM_WEIGHTS = {
     "detumble_satellite": 0.50,
     "retarget_180_flip": 0.25,
@@ -219,7 +223,8 @@ def filter_records_by_curriculum(records: list[dict[str, Any]], target: int = 25
     return out
 
 
-# ------------------------- LoRA controller wrapper for eval -------------------------
+# Inference-side helper: load a trained LoRA adapter and expose it as a `controller(obs) -> action_dict`
+# so the eval harness can swap it in alongside the random / deterministic / tuned-PD baselines.
 
 def make_lora_controller(adapter_dir: str | Path, base_model: str = DEFAULT_MODEL):
     import torch
@@ -250,8 +255,8 @@ def make_lora_controller(adapter_dir: str | Path, base_model: str = DEFAULT_MODE
         out = model.generate(
             **inputs,
             max_new_tokens=96,
-            do_sample=False,
-            temperature=1.0,
+            do_sample=True,
+            temperature=0.7,
             pad_token_id=tokenizer.eos_token_id,
         )
         text = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
@@ -263,7 +268,8 @@ def make_lora_controller(adapter_dir: str | Path, base_model: str = DEFAULT_MODE
     return controller
 
 
-# ------------------------- Training metric logger -------------------------
+# Trainer callback that appends every logged step (loss, per-reward means/std, KL, etc.)
+# to a CSV so we can plot training curves afterwards without rerunning the job.
 
 class RewardCSVLogger:
     """Trainer-callback that appends per-step reward components and loss to a CSV."""

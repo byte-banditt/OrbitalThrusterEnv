@@ -141,7 +141,7 @@ def run_grpo(max_steps: int = 120) -> None:
             print(f"[local_train] warm-started from SFT adapter {SFT_OUTPUT_DIR}")
         except Exception as exc:
             print(f"[local_train] SFT load failed ({exc}); attaching fresh LoRA.")
-            model = attach_lora(model, r=32, alpha=32)
+            model = attach_lora(model, r=16, alpha=16)
     else:
         model = attach_lora(model, r=32, alpha=32)
 

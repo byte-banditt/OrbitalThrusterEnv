@@ -52,9 +52,9 @@ def main() -> None:
     tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
 
     model = FastLanguageModel.get_peft_model(
-        model, r=32,
+        model, r=16,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=32, lora_dropout=0.0,
+        lora_alpha=16, lora_dropout=0.0,
     )
 
     skip_warm = os.environ.get("ORBITAL_SKIP_SFT_WARMUP", "0") == "1"
@@ -112,7 +112,7 @@ def main() -> None:
         train_dataset=dataset,
         args=GRPOConfig(
             output_dir=str(GRPO_OUTPUT_DIR),
-            num_generations=int(os.environ.get("ORBITAL_NUM_GEN", "6")),
+            num_generations=int(os.environ.get("ORBITAL_NUM_GEN", "8")),
             max_completion_length=96,
             max_prompt_length=1536,
             per_device_train_batch_size=1,
@@ -123,7 +123,7 @@ def main() -> None:
             logging_steps=2,
             max_steps=int(os.environ.get("ORBITAL_GRPO_STEPS", "300")),
             save_steps=100,
-            temperature=0.9,
+            temperature=1.3,
             top_p=0.95,
             report_to=[],
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
